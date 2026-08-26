@@ -178,3 +178,4 @@ python scripts/utils/where_am_i.py           # 或传一个显式的 <run_dir>
 3. **安全投递**：每次投递间隔 3-5 秒，每次会话最多 10-20 个，验证码时暂停
 4. **始终可视化**：每次运行都生成并打开 HTML 报告
 5. **磁盘上的产物才是真相**：用文件和退出码判断一个阶段，而不是凭通知
+6. **PDF 只用 `parse_pdf`（PyPDF2）解析，绝不另试别法**：任何上游给的 PDF —— 简历，或用户上传的含公司名称等数据的 PDF —— 一律走 `scripts/resume_matcher/parsers.py::parse_pdf` 的 PyPDF2 文本抽取。**不经 OCR**，不猜其它库，不为其发明新解析路径；扫描版/加密 PDF 抽不出文本是预期行为，按 `parse` 阶段的提示请用户另存为 `.md`/`.txt` 再跑。
