@@ -49,7 +49,7 @@ python scripts/utils/llm_check.py --no-call        # 退出 0 = 可用，1 = 配
 | 选项 | 何时用 | 流程 |
 |------|------|------|
 | **A: 简历驱动** ✨ | 有简历，想要精确 | parse → infer → crawl → match… → apply |
-| **B: 已有岗位数据** | 有简历，且 `assets/post_data/` 里已有 CSV | parse → infer → *(跳过 crawl)* → match… → apply |
+| **B: 已有岗位数据** | 有简历，且 `assets/post_data/` 里已有 CSV（含 `company/` 子目录的公司定向采集结果） | parse → infer → *(跳过 crawl)* → match… → apply |
 | **C: 预设重放** | 用保存的预设重跑，不用重新声明 | preset → parse → infer *(预设值)* → crawl → match… |
 | **D: 仅编辑简历** | 还没有简历文件，想写或改一份 | 启动简历编辑器 → **到此为止** |
 
@@ -266,6 +266,16 @@ python scripts/pipeline.py --from crawl
 之后下限检查自己跑：阈值来自 `crawl_params.json` 里的 `min_count`，`--min-jobs N` 只覆盖它。缺失 `crawl_summary.json` 意味着**什么都没爬到**——爬虫在检测到已登出会话时会以 0 退出，所以光靠退出码看不出来。当下限触发时，**停下问用户**——换关键词 / 放宽筛选 / 接受现状（继续，`--min-jobs 0`）——而不是拿着稀薄的池子硬往下走。小城市爬取可以合理地提前结束；这正是这个检查要暴露的情况，而不是要覆盖掉。
 
 行数只是岗位数的上界，而且它数的是**整个 `assets/post_data/` 池子**，不只是本次运行：一个命中三个关键词的岗位会被写三次，加载时去重。你需要的每个筛选值都在上面的表里。
+
+### 公司定向采集（-m company → 某公司全部在招岗）
+
+想定向抓**某家公司的全部在招岗**（而不是关键词搜到什么算什么）时，用爬虫的第三种模式：
+
+```bash
+python scripts/stages/boss_post_interactive.py -m company -p "字节跳动,腾讯" -c "全国" -n 30 -d -y
+```
+
+`-c` 可给指定城市（分公司）或 `全国`；`-d` 连详情 → `公司信息` 列由详情接口的 `brandComInfo` 回填公司简介。产物写到 `assets/post_data/company/{公司}_{城市}.csv`，字段与关键词爬完全同构（`CSV_FIELDS`）。**这就是喂给「路径 B」的现成 CSV**：一份简历 + 这份采集 → `parse` → `infer` →（跳过 crawl）→ `--from match` → match/deep/merge → `gate:jobs` → `materials` → `render` → `gate:send` → `apply.py --yes`，匹配/投递侧零改动。实现用搜索接口 + `brandName` 精确过滤（无需联网校准、即时可用）；「品牌主页逐页抓满」的精确增强见 `references/cli.md` 公司定向节。
 
 ### match → deep → merge —— 打分与报告
 

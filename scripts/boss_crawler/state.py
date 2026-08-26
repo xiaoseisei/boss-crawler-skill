@@ -201,12 +201,15 @@ class StepManager:
         print("=" * 50)
 
         if self.selections['mode']:
-            mode_text = "自定义搜索" if self.selections['mode'] == 'custom' else "列表选择"
+            mode = self.selections['mode']
+            mode_text = {'custom': '自定义搜索', 'company': '公司定向',
+                         'list': '列表选择'}.get(mode, mode)
             print(f"\n  岗位模式: {mode_text}")
 
         if self.selections['positions']:
             pos_names = [p[2] for p in self.selections['positions']]
-            label = '关键词' if self.selections['mode'] == 'custom' else '岗位'
+            mode = self.selections['mode']
+            label = '公司名' if mode == 'company' else ('关键词' if mode == 'custom' else '岗位')
             print(f"  {label}: {', '.join(pos_names)}")
 
         if self.selections['cities']:

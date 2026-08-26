@@ -109,10 +109,15 @@ def should_skip_remaining_pages(page_size, run_dups):
     return run_dups / page_size >= DUP_PAGE_RATIO
 
 
-def _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen=None):
+def _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen=None,
+                     job_filter=None):
     """
     通用的翻页爬取循环。
-    两个爬取函数（by_position / by_query）共用此翻页逻辑。
+    三个爬取函数（by_position / by_query / company_mode）共用此翻页逻辑。
+
+    job_filter: 可选，接收单个 job dict，返回 True 才写入。公司定向用它把搜索结果
+               里不属于目标公司（brandName 精确匹配）的岗位滤掉 —— link 去重、到底
+               判定都在过滤之后算，避免被其他公司的岗位撑混。
 
     Returns:
         (total_processed, total_written, total_skipped, total_run_dups)
@@ -172,6 +177,8 @@ def _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen=N
 
             try:
                 job_list = r.response.body.get('zpData', {}).get('jobList', [])
+                if job_filter is not None:
+                    job_list = [j for j in job_list if job_filter(j)]
                 written, skipped, run_dups = process_job_list(
                     job_list, file_path, existing_links, csv_writer, run_seen
                 )
@@ -543,18 +550,21 @@ def crawl_job_details(dp, file_path, existing_links):
 # ==================== 共享编排函数（消除重复） ====================
 
 def execute_crawl_iteration(dp, positions, cities, is_custom, count_limit,
-                            with_detail, filter_query=''):
+                            with_detail, filter_query='', is_company=False):
     """
     执行爬取迭代（被 run_crawl_process 和 run_crawl_cli 共用）。
 
     Args:
         dp: WebPage 实例
-        positions: [(pos_path, pos_code, pos_name), ...]
+        positions: [(pos_path, pos_code, pos_name), ...]；company 模式下即为
+                   [(None, None, 公司名), ...]
         cities: [(city_name, city_code), ...]
         is_custom: True=关键词搜索, False=列表模式
         count_limit: int or None
         with_detail: bool
         filter_query: URL 筛选参数字符串
+        is_company: True=公司定向模式。company 模式下本函数复用 crawl_company，
+                    它内部已做完 搜索过滤翻页 + 详情回填，不再走下面的统一详情步。
 
     Returns:
         {'total': int, 'written': int, 'skipped': int, 'run_dups': int}
@@ -573,6 +583,19 @@ def execute_crawl_iteration(dp, positions, cities, is_custom, count_limit,
             print(f"\n{'='*50}")
             print(f"正在爬取: {pos_name} - {city_name}")
             print(f"{'='*50}")
+
+            if is_company:
+                from .company import crawl_company, company_output_path
+                file_path = company_output_path(pos_name, city_name)
+                existing_links = load_existing_links(file_path)
+                more = crawl_company(dp, pos_name, city_name, city_code,
+                                     count_limit, with_detail, detail_existing_links)
+                for key in ('total', 'written', 'skipped', 'run_dups'):
+                    total_stats[key] += more[key]
+                if with_detail and more['written'] > 0:
+                    # crawl_company 内部已跑详情回填（written > 0 时），这里只报一次。
+                    print(f"\n详情爬取完成: 成功 {more['written']} 条(过滤后)")
+                continue
 
             if is_custom:
                 file_path = os.path.join(ASSETS_DIR, 'post_data', 'custom', f"{pos_name}_{city_name}.csv")
@@ -652,9 +675,9 @@ def run_crawl_process():
     from .config import sleep_config as sc
     from .data_loader import load_position_data, load_city_data
     from .menu import (
-        show_position_mode_menu, input_custom_position, show_position_menu,
-        show_city_menu, ask_crawl_count, ask_detail_option, ask_sleep_option,
-        ask_filter_options, show_summary_and_confirm,
+        show_position_mode_menu, input_custom_position, input_company_names,
+        show_position_menu, show_city_menu, ask_crawl_count, ask_detail_option,
+        ask_sleep_option, ask_filter_options, show_summary_and_confirm,
     )
     from .state import step_manager
     from .utils import build_filter_query_string
@@ -685,6 +708,11 @@ def run_crawl_process():
         if mode == 'custom':
             keywords = input_custom_position()
             if keywords == 'back':
+                step_manager.go_back()
+                continue
+        elif mode == 'company':
+            companies = input_company_names()
+            if companies == 'back':
                 step_manager.go_back()
                 continue
         else:
@@ -736,6 +764,7 @@ def run_crawl_process():
     with_detail = selections['with_detail']
     sleep_enabled = selections['sleep_enabled']
     is_custom = selections['mode'] == 'custom'
+    is_company = selections['mode'] == 'company'
     filter_params = selections.get('filter_params', {})
     filter_query = build_filter_query_string(filter_params)
 
@@ -748,7 +777,8 @@ def run_crawl_process():
     dp = WebPage(chromium_options=co)
 
     total_stats = execute_crawl_iteration(
-        dp, positions, cities, is_custom, count_limit, with_detail, filter_query
+        dp, positions, cities, is_custom, count_limit, with_detail, filter_query,
+        is_company=is_company
     )
 
     dp.quit()
@@ -793,8 +823,9 @@ def run_crawl_cli(args):
 
     # 3. 解析位置
     is_custom = args.mode == 'custom'
+    is_company = args.mode == 'company'
 
-    if is_custom:
+    if is_custom or is_company:
         positions = [(None, None, name) for name in pos_names]
     else:
         positions = find_positions_by_name(position_data, pos_names)
@@ -830,9 +861,9 @@ def run_crawl_cli(args):
     total_items, total_time = estimate_time(positions, cities, count_limit, with_detail)
 
     print_header("爬取信息摘要")
-    mode_text = "关键词搜索" if is_custom else "列表选择"
+    mode_text = '公司定向' if is_company else ('关键词搜索' if is_custom else '列表选择')
     print(f"\n  模式: {mode_text}")
-    label = '关键词' if is_custom else '岗位'
+    label = '公司名' if is_company else ('关键词' if is_custom else '岗位')
     print(f"  {label}: {', '.join(p[2] for p in positions)}")
     print(f"  城市: {', '.join(c[0] for c in cities)}")
     print(f"  数量限制: {count_limit if count_limit else '全部'}")
@@ -881,7 +912,8 @@ def run_crawl_cli(args):
     time_stats.start()
 
     total_stats = execute_crawl_iteration(
-        dp, positions, cities, is_custom, count_limit, with_detail, filter_query
+        dp, positions, cities, is_custom, count_limit, with_detail, filter_query,
+        is_company=is_company
     )
 
     dp.quit()

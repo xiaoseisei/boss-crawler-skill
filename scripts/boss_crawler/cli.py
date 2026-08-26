@@ -38,6 +38,10 @@ def parse_args():
   # 带筛选条件的精准搜索
   {e} -m custom -p "Python后端" -c "北京" -n 20 -e "3-5年" -deg "本科" -s "20-50K" -d -y
 
+  # 按公司名定向采集某公司的全部在招岗（写 assets/post_data/company/，可接路径B匹配）
+  {e} -m company -p "字节跳动,腾讯" -c "北京" -n 30 -d -y
+  {e} -m company -p "字节跳动" -c "全国" -d -y
+
   # 交互式模式（不带参数或参数不完整时）
   {e}
         '''.format(e=entry)
@@ -58,10 +62,12 @@ def parse_args():
     parser.add_argument('--run-dir', dest='run_dir', default=None,
                         help='运行目录（assets/<时间戳>/）。传了就把整轮爬取耗时写进该目录的 '
                              'run_timings.jsonl，供 stage_timer.py report 排行；不传则不计时')
-    parser.add_argument('--mode', '-m', choices=['list', 'custom'], default='list',
-                        help='岗位选择模式: list=从岗位列表选择(默认), custom=关键词搜索')
+    parser.add_argument('--mode', '-m', choices=['list', 'custom', 'company'], default='list',
+                        help='岗位选择模式: list=从岗位列表选择(默认), custom=关键词搜索, '
+                             'company=按公司名定向采集该公司的全部在招岗')
     parser.add_argument('--position', '-p', action='append', dest='positions', default=None,
-                        help='岗位名称(list模式)或搜索关键词(custom模式)，可多次指定或用逗号分隔')
+                        help='岗位名称(list模式)/搜索关键词(custom模式)/公司名(company模式)，'
+                             '可多次指定或用逗号分隔')
     parser.add_argument('--city', '-c', action='append', dest='cities', default=None,
                         help='城市名称或代码，可多次指定或用逗号分隔，使用 "all" 选择全部城市')
     parser.add_argument('--count', '-n', type=int, default=0,

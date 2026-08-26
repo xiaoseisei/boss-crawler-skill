@@ -193,7 +193,7 @@ python scripts/deliver/apply.py "assets/…" --yes --greeting-file greeting.txt 
 |---|---|---|---|
 | 解析简历 | `parse_resume.py 简历.pdf` | PDF/Word/md/txt | `profile.json` |
 | 推断参数 | `infer_params.py <run_dir>` | `profile.json` | `crawl_params.json` |
-| 爬取岗位 | `boss_post_interactive.py -m custom -p "Python" -c "杭州" -n 20 -d -y --run-dir <run_dir>` | BOSS 直聘 | `assets/post_data/*.csv`、`crawl_summary.json` |
+| 爬取岗位 | `boss_post_interactive.py -m custom -p "Python" -c "杭州" -n 20 -d -y --run-dir <run_dir>` · 或 `-m company -p "字节跳动" -c "全国" -d -y` 按公司名定向 | BOSS 直聘 | `assets/post_data/*.csv`（company 模式在 `company/` 子目录）、`crawl_summary.json` |
 | 规则匹配 | `run_matcher.py --mode quick --profile <run_dir>/profile.json -o <run_dir>` | CSV + profile | `scored_jobs.json`、HTML 报告 |
 | 深度预筛 | `run_matcher.py --mode deep --profile … --top 15 -o <run_dir>` | CSV + profile | `deep_candidates.json` |
 | 深度分析 | `deep_analyze.py <run_dir>` | `deep_candidates.json` | `deep_results.json` |
@@ -208,6 +208,21 @@ python scripts/deliver/apply.py "assets/…" --yes --greeting-file greeting.txt 
 「可读投递材料」那一行现在**挂在 `materials` 阶段之后**：`pipeline.py --from materials`（或整轮 `--to render`）会在材料生成后自动跑 `write_application_md.py --all`，不用单独跑它。它不依赖长图渲染，所以 `--resume-mode skip` / `--no-images` 时也照写。
 
 同理还有两道自动子步骤：**`render` 之后自动跑 `verify_image.py <run_dir>/deliver --all`** 图检（图刚渲出来就把几十行数字打给模型看，替代 Read 一张 640k token 的 PNG）；**计划里含任何 LLM 阶段时，`parse` 之前自动跑 `llm_check.py --no-call` 预检配置**（缺了早停，不把最贵的爬取/匹配跑死在配置上）。
+
+### 公司定向采集（`-m company`）— 指定公司 → 该公司全部在招岗 → CSV
+
+第三个爬取模式：输入**公司全名**，定向抓取该公司全部在招岗，写到 `assets/post_data/company/{公司}_{城市}.csv`。这份 CSV 和关键词爬的一模一样（同 `CSV_FIELDS`），所以 `run_matcher` 会像读 `custom/` 一样把它扫进匹配池 —— 配合一份简历走 **路径 B**（`parse` → `infer` → 跳过 crawl → `--from match`）就能匹配、生成材料、投递，采集侧零改动。
+
+```bash
+python scripts/stages/boss_post_interactive.py -m company -p "字节跳动,腾讯" -c "北京" -n 30 -d -y
+python scripts/stages/boss_post_interactive.py -m company -p "字节跳动" -c "全国" -d -y
+```
+
+参数同 `custom`：`-p` 填公司名（逗号分隔多家）、`-c` 填一个或多个城市（`全国`/`不限` 一次抓全部异地岗）、`-n` 每公司每城市上限、`-d` 连详情（含 JD / HR / **公司简介** —— 公司简介由详情接口的 `brandComInfo` 回填到 `公司信息` 列，不需要进品牌主页）。交互式流程的「岗位输入方式」里选第 3 项「按公司名定向采集」。
+
+实现上用的是**搜索接口 + `brandName` 精确过滤**（不是品牌主页）：按公司全名翻页搜索，把不属于该公司的岗位滤掉。这个接口的字段键名（`brandName`/`salaryDesc`/`encryptJobId`…）和翻页都是现有爬取已证实过的，所以不需要联网校准、`-m company` 立即可用。边界：抓的是「搜索接口物理上限内的全部」，若某岗因公司名写法不同没被 query 命中就可能漏 —— 绝大多数公司够用。真要「品牌主页逐页抓满」的精确增强，先跑 `scripts/stages/company_probe.py "<公司名>"` 拿真实品牌页结构再补。
+
+别忘了先登录（与会话缓存一致）：`python scripts/stages/boss_post_interactive.py --ensure-login`。
 
 ### parse_resume.py — 简历 → profile.json
 

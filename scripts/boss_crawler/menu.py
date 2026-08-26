@@ -105,7 +105,8 @@ def show_position_mode_menu():
 
         print("请选择岗位输入方式:")
         print("  1. 从岗位列表选择")
-        print("  2. 自定义输入岗位名称（搜索模式）")
+        print("  2. 自定义输入岗位名称（关键词搜索）")
+        print("  3. 按公司名定向采集（抓该公司全部在招岗）")
         print("\n  b. 返回上一步")
 
         choice = input("\n> ").strip().lower()
@@ -118,10 +119,14 @@ def show_position_mode_menu():
             step_manager.selections['mode'] = 'custom'
             step_manager.next_step()
             return 'custom'
+        elif choice == '3':
+            step_manager.selections['mode'] = 'company'
+            step_manager.next_step()
+            return 'company'
         elif choice in ['b', 'back']:
             return 'back'
         else:
-            print("请输入有效选项 (1-2 或 b)")
+            print("请输入有效选项 (1-3 或 b)")
 
 
 # ==================== 步骤 2a：自定义关键词 ====================
@@ -154,6 +159,40 @@ def input_custom_position():
                 return keywords
 
         print("请输入至少一个关键词")
+
+
+# ==================== 步骤 2a'：公司定向 ====================
+
+def input_company_names():
+    """
+    定向采集 -- 输入公司名（可多个，逗号分隔；可带城市范围由下一步定）
+    返回: [公司名列表] 或 'back'
+    """
+    while True:
+        print_step_hint(2)
+        print_header("公司名定向采集")
+        step_manager.show_selections()
+
+        print("请输入公司全名 (可多个，用逗号分隔):")
+        print("示例: 字节跳动,腾讯")
+        print("定向抓取这些公司各自的全部在招岗，写到 assets/post_data/company/ 下，")
+        print("可继续走路径 B（简历匹配 → 投递）。")
+        print("\n  b. 返回上一步")
+
+        user_input = input("\n> ").strip()
+
+        if user_input.lower() in ['b', 'back']:
+            step_manager.go_back()
+            return 'back'
+
+        if user_input:
+            companies = [k.strip().strip('，') for k in user_input.replace('，', ',').split(',') if k.strip()]
+            if companies:
+                step_manager.selections['positions'] = [(None, None, k) for k in companies]
+                step_manager.next_step()
+                return companies
+
+        print("请输入至少一家公司名")
 
 
 # ==================== 步骤 2b：分层岗位选择 ====================
@@ -533,6 +572,8 @@ def show_summary_and_confirm():
     with_detail = selections['with_detail']
     sleep_enabled = selections['sleep_enabled']
     is_custom = selections['mode'] == 'custom'
+    is_company = selections['mode'] == 'company'
+    label = '公司名' if is_company else ('关键词' if is_custom else '岗位')
 
     while True:
         print_header("预估爬取信息")
@@ -542,10 +583,10 @@ def show_summary_and_confirm():
         list_time = math.ceil(total_items / PER_PAGE) * PER_PAGE_TIME / 60
         detail_time = total_items * PER_DETAIL_TIME / 60 if with_detail else 0
 
-        print(f"\n  {'关键词' if is_custom else '岗位'}数量: {len(positions)} 个")
+        print(f"\n  {label}数量: {len(positions)} 个")
         print(f"  城市数量: {len(cities)} 个")
         if count_limit:
-            print(f"  每城市每{'关键词' if is_custom else '岗位'}最大数量: {count_limit} 条")
+            print(f"  每城市每{label}最大数量: {count_limit} 条")
         else:
             print(f"  爬取数量: 全部")
         print(f"  是否爬取详情: {'是' if with_detail else '否'}")

@@ -132,6 +132,12 @@ CSV_FIELDS = [
 _SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ASSETS_DIR = os.path.join(_SKILL_ROOT, 'assets')
 
+# 公司定向采集的输出目录。放 post_data/ 下而不是别处，关键是为了让 match 阶段
+# （resume_matcher/data_loader.list_available_job_files 用 os.walk 递归扫 post_data/）
+# 能像读 custom/ 一样把公司采集结果无缝扫进匹配池 —— 这是「公司定向 → 路径 B
+# match/deliver」整条链路能走通的落点。
+COMPANY_OUTPUT_DIR = os.path.join(ASSETS_DIR, 'post_data', 'company')
+
 # ==================== Chrome 配置 ====================
 
 co = ChromiumOptions()

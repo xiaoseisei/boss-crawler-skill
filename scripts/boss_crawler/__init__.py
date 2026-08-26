@@ -86,6 +86,7 @@ from .menu import (
     show_main_menu,
     show_position_mode_menu,
     input_custom_position,
+    input_company_names,
     show_position_menu,
     show_city_menu,
     ask_crawl_count,
@@ -224,7 +225,7 @@ __all__ = [
     "TimeStats", "time_stats", "StepManager", "step_manager",
     # Menu
     "print_header", "print_step_hint", "show_main_menu",
-    "show_position_mode_menu", "input_custom_position",
+    "show_position_mode_menu", "input_custom_position", "input_company_names",
     "show_position_menu", "show_city_menu", "ask_crawl_count",
     "ask_detail_option", "ask_sleep_option", "ask_filter_options",
     "show_summary_and_confirm", "list_all_positions", "list_all_cities",
