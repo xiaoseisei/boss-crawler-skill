@@ -13,7 +13,7 @@ description: 用 DrissionPage 爬取 BOSS 直聘职位，解析简历，用规�
 parse → infer → crawl → match → deep → merge → materials → verify → render        [ apply ]
 ```
 
-`scripts/pipeline.py` 是驱动程序。所有脚本都位于相对本 skill 目录的 `scripts/` 下。**[references/cli.md](references/cli.md)** 保存完整的参数表和每个阶段的故障排查——当一条命令以本文件无法解释的方式失败时打开它，而不是当作例行阅读。
+`scripts/pipeline.py` 是驱动程序。所有脚本都位于相对本 skill 目录的 `scripts/` 下。**[references/cli.md](references/cli.md)** 保存完整的参数表和每个阶段的故障排查——当一条命令以本文件或某阶段参考无法解释的方式失败时打开它，而不是当作例行阅读。
 
 **所有脚本共用同一套四个退出码。在判定某个阶段失败之前先读它们：**
 
@@ -26,7 +26,7 @@ parse → infer → crawl → match → deep → merge → materials → verify 
 
 `3` 是最容易被误读成失败的那个。`deep`、`materials` 和 `render` 都会常规性地走到它，因为它们按岗位逐个处理。
 
-有一个阶段弯曲了 `1`：对 `verify` 来说，退出 `1` 表示检查**成功并发现了问题**。没有坏任何东西，重跑也不会改变什么——动手之前先读 [verify](#verify--模型有没有凭空造技能) 一节。
+有一个阶段弯曲了 `1`：对 `verify` 来说，退出 `1` 表示检查**成功并发现了问题**。没有坏任何东西，重跑也不会改变什么——动手之前先读 [references/stages/10-verify.md](references/stages/10-verify.md)。
 
 **一次只驱动一个阶段。** `pipeline.py --from <stage>` 只运行那一个阶段（`match` 还会连带 `deep`+`merge`，因为停在 `match` 会留下一个下游谁也读不了的半成品），然后停下并打印下一条命令。**别用一条 `--to render` 把整轮一口气跑完**：下面的几道闸门处在阶段之间，而一口气跑到底会直接冲过去，把用户的 token 花在一份他们还没看到的岗位列表上。
 
@@ -42,9 +42,9 @@ python scripts/utils/llm_check.py --no-call        # 退出 0 = 可用，1 = 配
 
 ## 路径选择
 
-**每次调用开始都必须让用户选一条路径**——一次 `AskUserQuestion`，**恰好 4 个选项**。不要从保存过的预设或磁盘上恰好存在的东西自动选；预设是在路径选好*之后*才提供参数。
+**每次调用开始都必须让用户定一条路径**——但这一停点**不用 `AskUserQuestion`**。你直接以普通文本输出「推荐用法」：默认推荐路径 A，附上下面那张 A/B/C/D/E 简表让用户对表选，然后**停下等用户用文字回复**——敲 `A`/`B`/`C`/`D`/`E`、@ 一个简历文件、或贴一句需求都行。不要从保存过的预设或磁盘上恰好存在的东西自动选路径；预设是在路径确定*之后*才提供参数。
 
-**选项一旦被选定，就按字面执行，绝不绕回去。** 用户选了「手动输入」，接下来唯一该做的是停下，等他们给出路径——**不要**自己跑 `ls`/`find` 去磁盘搜简历文件、再列几个候选让用户重新选一次，那等于把用户刚做的选择又抹掉了。磁盘搜索只发生在用户明确要求之后。选完就别再自作主张地"提前帮忙"。
+**路径一旦被用户文字确定，就按字面执行，绝不绕回去。** 比如用户只敲了 `A` 或 @ 了一份简历，接下来唯一该做的是停下、按该路径的下一问继续——需要简历路径时，停下来等用户给路径，**不要**自己跑 `ls`/`find` 去磁盘搜简历文件、再列几个候选让用户重选一遍，那等于把用户刚做的选择又抹掉了。磁盘搜索只发生在用户明确要求之后。定完就别再自作主张地"提前帮忙"。
 
 | 选项 | 何时用 | 流程 |
 |------|------|------|
@@ -52,16 +52,19 @@ python scripts/utils/llm_check.py --no-call        # 退出 0 = 可用，1 = 配
 | **B: 已有岗位数据** | 有简历，且 `assets/post_data/` 里已有 CSV（含 `company/` 子目录的公司定向采集结果） | parse → infer → *(跳过 crawl)* → match… → apply |
 | **C: 预设重放** | 用保存的预设重跑，不用重新声明 | preset → parse → infer *(预设值)* → crawl → match… |
 | **D: 仅编辑简历** | 还没有简历文件，想写或改一份 | 启动简历编辑器 → **到此为止** |
+| **E: 公司定向采集** | 想定向抓某几家公司的**全部在招岗**，只要公司名、无需简历 | 输入公司名 → 公司定向爬取 → `company/` CSV → **到此为止**（有简历可再接路径 B 匹配） |
 
-**每条路径都从 `parse` 开始。** `infer` 读 `profile.json`，`crawl` 读 `infer` 写出的 `crawl_params.json`——所以"先爬后解析"不是受支持的顺序。路径 B 与 A 只差一件事：跳过 `crawl` 阶段（`infer` 之后直接 `--from match`）。
+**每条路径都从 `parse` 开始。** `infer` 读 `profile.json`，`crawl` 读 `infer` 写出的 `crawl_params.json`——所以"先爬后解析"不是受支持的顺序。路径 B 与 A 只差一件事：跳过 `crawl` 阶段（`infer` 之后直接 `--from match`）。**路径 E 是唯一例外**：它不从 `parse` 起，也不经过九个阶段任何一环——直接跑公司爬虫产 CSV，纯采集用（四大码 / 流水线 / run 目录那一套对它都不适用）。
 
-**AskUserQuestion 选项上限（本 skill 的每个提问都一样）：** 每个问题最多 4 个选项。当某个选择有更多候选——薪资档、关键词选择——取最相关的 4 个，把推荐默认值放第一个，让自动加的「其他」兜住其余。绝不发出第 5 个选项；工具会拒绝该调用。与其让调用失败，不如把一个过长的提问拆成后续问题。
+**AskUserQuestion 选项上限（本 skill 每个用该工具的提问都一样；路径选择那一停点不用该工具，不在此列）：** 每个问题最多 4 个选项。当某个选择有更多候选——薪资档、关键词选择——取最相关的 4 个，把推荐默认值放第一个，让自动加的「其他」兜住其余。绝不发出第 5 个选项；工具会拒绝该调用。与其让调用失败，不如把一个过长的提问拆成后续问题。
 
-**每个阶段一轮 `AskUserQuestion`，而不是每个字段一轮。** 该工具接受一个问题列表；把一个阶段需要的所有决定都打包进那一次调用（最多 4 个问题）。本 skill 恰好有四个交互停点——路径选择、`infer` 确认、`gate:jobs`、`gate:send`——每个都**恰好一次**调用。绝不要单独问一个字段（`--salary?` 然后 `--degree?` 然后 `--count?`）：那正是 9 轮爬取参数会话的由来，而每一轮大约耗掉用户 1.5 分钟的注意力。如果某个阶段确实需要两批，就在下面的清单里点名写明，免得它悄悄变成四批。
+**每个阶段一轮 `AskUserQuestion`，而不是每个字段一轮。** 该工具接受一个问题列表；把一个阶段需要的所有决定都打包进那一次调用（最多 4 个问题）。本 skill 恰好有三个用 `AskUserQuestion` 的停点——`infer` 确认、`gate:jobs`、`gate:send`——每个都**恰好一次**调用（路径选择那一步是纯文本推荐的停点，不在其列）。绝不要单独问一个字段：那正是 9 轮爬取参数会话的由来，而每一轮大约耗掉用户 1.5 分钟的注意力。
 
 **推荐路径 A**：简历会告诉你搜什么——技能、城市、薪资区间——所以爬到的岗位跟候选人的背景对齐，而不是跟瞎猜的关键词对齐。
 
 **路径 D 以启动告终。** 它打开编辑器、报告 URL，仅此而已。它通常作为前奏：用户写一份简历，然后从 A/B/C 重新进入。编辑器里存的 Markdown 可以直接喂给 `parse`——但只在用户要求时。
+
+**路径 E 是唯一不碰简历的采集路径**——整套只有公司爬虫，产出落在 `assets/post_data/company/`，正是路径 B 认的现成数据。它通常作为前奏：先定向抓几家目标公司的在招岗，回头再凭简历走路径 B 做匹配/投递。用户已有简历时，采集完可接路径 B 的匹配侧；没有简历就止步于 CSV。
 
 **路径 C 是预设路径。** `preferences.py show` 打印已存的参数，`preferences.py missing` 点名预设缺了哪些可问字段（薪资/规模/最低岗位数 以及同类）。只问**恰好**那些，用 `preferences.py save` 合并回去，再把整组作为 flag 传给 `infer`。如果 `show` 退出 1，说明没有预设——退回路径 A 的全新确认，而不是报错。
 
@@ -73,7 +76,7 @@ python scripts/utils/llm_check.py --no-call        # 退出 0 = 可用，1 = 配
 
 ## 运行目录
 
-`parse` 在 `assets/` 下创建带时间戳的运行目录（例如 `assets/2026-08-16_14-30-00/`）并把 `assets/LATEST.txt` 指向它。之后每个阶段都会自动找到它；要显式指定就传 `--run-dir`。路径 D 不产生运行产物，也不需要运行目录。
+`parse` 在 `assets/` 下创建带时间戳的运行目录（例如 `assets/2026-08-16_14-30-00/`）并把 `assets/LATEST.txt` 指向它。之后每个阶段都会自动找到它；要显式指定就传 `--run-dir`。路径 D 不产生运行产物，也不需要运行目录；路径 E 直接写 `assets/post_data/company/`，同样不建运行目录、不碰 `LATEST.txt`。
 
 ---
 
@@ -84,21 +87,32 @@ python scripts/utils/llm_check.py --no-call        # 退出 0 = 可用，1 = 配
 ```
 进度：
 - [ ] 前置：LLM 配置预检（pipeline 会自动跑 llm_check.py --no-call，退出 1 会停掉整次运行）
-- [ ] 路径选择：一次 AskUserQuestion，4 个选项 (A / B / C / D)
-- [ ] 阶段 0：启动简历编辑器（路径 D——终止步骤）
-- [ ] parse:     简历文件 → profile.json
-- [ ] infer:     确认参数（2 次打包提问 + min_count）→ crawl_params.json
-- [ ] crawl:     后台运行，然后检查下限（路径 A、C）
-- [ ] match:     → deep → merge → matching_report.html + qualified_jobs.json
-- [ ] gate:jobs  一次 AskUserQuestion：投哪些 + 招呼语方式 + 图片方式
-- [ ] 计划征询:   简历怎么改，用户先点头（条件停点；写 plan_+decision_ JSON）
-- [ ] materials: 招呼语 + 优化后简历（后自动落盘 岗位信息+招呼语.md）
-- [ ] verify:    没有凭空造技能（退出 1 = 发现了——停下给用户看）
-- [ ] render:    简历长图（用 --no-images 跳过；后自动 verify_image 图检）
-- [ ] gate:send  一次 AskUserQuestion → apply.py --yes
+- [ ] 路径选择：直接输出推荐用法（默认 A）+ A/B/C/D/E 简表，停下等用户文字输入
+- [ ] 阶段 0：启动简历编辑器（路径 D——终止步骤）→ 读 [01-showcv.md](references/stages/01-showcv.md)
+- [ ] parse:     简历文件 → profile.json → 读 [02-parse.md](references/stages/02-parse.md)
+- [ ] infer:     确认参数（2 次打包提问 + min_count）→ crawl_params.json → 读 [03-infer.md](references/stages/03-infer.md)
+- [ ] crawl:     后台运行，然后检查下限（路径 A、C）→ 读 [04-crawl.md](references/stages/04-crawl.md)
+- [ ] match:     → deep → merge → matching_report.html + qualified_jobs.json → 读 [05-match.md](references/stages/05-match.md)
+- [ ] gate:jobs  一次 AskUserQuestion：投哪些 + 招呼语方式 + 图片方式 → 读 [06-gate-jobs.md](references/stages/06-gate-jobs.md)
+- [ ] availability  到岗三样，缺就问（条件停点）→ 读 [07-availability.md](references/stages/07-availability.md)
+- [ ] 计划征询:   简历怎么改，用户先点头（条件停点；写 plan_+decision_ JSON）→ 读 [08-plan.md](references/stages/08-plan.md)
+- [ ] materials: 招呼语 + 优化后简历（后自动落盘 岗位信息+招呼语.md）→ 读 [09-materials.md](references/stages/09-materials.md)
+- [ ] verify:    没有凭空造技能（退出 1 = 发现了——停下给用户看）→ 读 [10-verify.md](references/stages/10-verify.md)
+- [ ] render:    简历长图（用 --no-images 跳过；后自动 verify_image 图检）→ 读 [11-render.md](references/stages/11-render.md)
+- [ ] gate:send  一次 AskUserQuestion → apply.py --yes → 读 [12-gate-send.md](references/stages/12-gate-send.md)
 ```
 
-**四个停点。** 路径选择、`infer` 确认（两次打包的 `AskUserQuestion` 调用加一次小小的 `min_count` 后续——当路径 C 复用完整预设时跳过）、`gate:jobs`、`gate:send`。外加三个条件停点：爬取下限（只在池子来得太稀薄时）、`availability`（只在该 run 要 AI 招呼语且到岗三样为 null 时）、`计划征询`（只在 `gate:jobs` 选了图片=待 AI 调整、走 AI 简历优化时）。
+**路径 E（公司定向纯采集）清单** —— 只走公司爬虫，不碰 parse / 简历 / 流水线；全程读 [04-crawl.md](references/stages/04-crawl.md) 的路径 E 一节：
+
+```
+- [ ] 输入公司名 + 城市 + 条数（纯文本停点，不用 AskUserQuestion）
+- [ ] 登录（--ensure-login，无登录态时；登录态持久化，已有则跳过）
+- [ ] 后台跑 boss_post_interactive.py -m company -p 公司名 -c 城市 -n N -d -y
+- [ ] 核查 assets/post_data/company/ 下各家 CSV 是否落盘、行数非空
+- [ ] 用户有简历 → 接路径 B 匹配侧；无 → 到此为止
+```
+
+**停点。** 路径选择（纯文本：输出推荐用法后停下等用户输入）、路径 E 的公司名输入（纯文本：问公司名+城市+条数后停下）、`infer` 确认（两次打包的 `AskUserQuestion` 调用加一次小小的 `min_count` 后续——当路径 C 复用完整预设时跳过）、`gate:jobs`、`gate:send`。外加三个条件停点：爬取下限（只在池子来得太稀薄时）、`availability`（只在该 run 要 AI 招呼语且到岗三样为 null 时）、`计划征询`（只在 `gate:jobs` 选了图片=待 AI 调整、走 AI 简历优化时）。
 
 **迷失了位置（例如在上下文压缩之后）？不要重读文档来重建状态。** 问文件系统：
 
@@ -106,12 +120,12 @@ python scripts/utils/llm_check.py --no-call        # 退出 0 = 可用，1 = 配
 python scripts/utils/where_am_i.py           # 或传一个显式的 <run_dir>
 ```
 
-它会根据磁盘上的产物推断出当前阶段，并用约 1k 字符打印下一条命令。只在它指向的那*一个*章节去查参考资料。
+它会根据磁盘上的产物推断出当前阶段，并用约 1k 字符打印下一条命令。只在它指向的那*一个*阶段参考文件去查详情。
 
-**让一次运行保持廉价的三个习惯。**
+## 让一次运行保持廉价的三个习惯
 
 1. **绝不 `Read` 一张渲染好的简历图片。** 用 `scripts/verify/verify_image.py`。一张 0.5 MB 的 PNG 花掉 638,960 个输入 token——单次工具调用就占了那个会话 79% 的新鲜输入。
-2. **绝不 `Read` 完整数据文件——用 `read_thin.py`。** `qualified_jobs.json` 带着完整的 JD 和公司描述；你只需要 link/公司/职位/分数/判定：
+2. **绝不 `Read` 完整数据文件——用 `read_thin.py`**，它是唯一能回答"我该挑几号岗位"的视图（`--kind ranked` 的 `index` 就是 `--only`、`materials_*_N` 和 `apply --max` 用的同一个从 1 开始计数的编号）：
 
    ```bash
    python scripts/utils/read_thin.py {run_dir}/qualified_jobs.json --kind jobs     # → 表格字段
@@ -119,8 +133,6 @@ python scripts/utils/where_am_i.py           # 或传一个显式的 <run_dir>
    python scripts/utils/read_thin.py {run_dir}/deep_results.json --kind deep       # → 只看判定
    python scripts/utils/read_thin.py {run_dir} --kind ranked                       # → 序号+公司+职位+分数+判定
    ```
-
-   `ranked` 接受的是**运行目录**，不是文件——分数和判定依模式分散在最多四个不同的文件里（`scored_jobs` → `job_classification` → `deep_results`，通过 `deep_candidates` 按 `rank` 连接），而 `qualified_jobs.json` 两者都没有。它是唯一能回答"我该挑几号岗位"的视图，因为它的 `index` 就是 `--only`、`materials_*_N` 和 `apply --max` 用的同一个从 1 开始计数的编号。**优先用它，而不要手工去连文件。** 它会同时报告 `matched` 和 `total`：`matched < total` 说明有些岗位从未出现在任何匹配产物里（通常是只爬不匹配的运行），而不是分数真地是空的。
 
 3. **在后台跑长阶段并用 grep 过滤输出。** `crawl` 要几十分钟，`deep`/`materials` 每个岗位打印一行——把全部输出灌进你的上下文正是触发压缩的原因。用 `run_in_background` 启动它们，然后只读关键部分：
 
@@ -130,395 +142,34 @@ python scripts/utils/where_am_i.py           # 或传一个显式的 <run_dir>
 
 耗时自动落在 `{run_dir}/intermediate/run_timings.jsonl`——每个阶段都会自我埋点，所以不用手工标记。`python scripts/stage_timer.py report <run_dir>` 给它们排序。
 
-### 阶段 0：启动简历编辑器（路径 D）
+## 阶段参考 —— 驱动某一阶段前，必须先读它
 
-在本地提供内嵌的 ShowCV 构建（`app/`）并在一个隔离的 Chromium 里打开它。不需要 `pnpm install` 或 node。
+**阶段细节已拆到 `references/stages/` 下，按需加载，不常驻。** 规则：**在你准备驱动某个阶段、执行它的命令之前，必须先 Read 它对应的参考文件**，再动手。绝不凭记忆或凭下面这句摘要就执行——摘要只够你判断「该不该停」，不够你安全运行。下方每个阶段旁的链接就是你要读的那份。
 
-**第 1 步——启动静态服务器**（后台任务）：
-
-```bash
-python scripts/showcv/serve.py
-```
-
-等待就绪信号并从它读出实际地址：
-
-```bash
-until grep -q "SHOWCV_READY" "<后台任务输出文件>"; do sleep 0.3; done
-grep "SHOWCV_READY" "<后台任务输出文件>"
-```
-
-第一行永远是 `SHOWCV_READY http://127.0.0.1:<port>`，默认 3090。**如果那个后台进程立刻退出却仍打印了 `SHOWCV_READY`**：说明服务已经在运行，本次复用了它。用那个地址继续——**不要**重启它或另选端口；端口正是用户保存的简历的作用域。
-
-**第 2 步——打开浏览器**（用第 1 步的地址，别假设是 3090）：
-
-```bash
-python scripts/showcv/launch.py http://127.0.0.1:3090
-```
-
-成功时打印 `url=` / `title=` / `profile=`，title 里有 `ShowCV`。**如果 title 里没有 `ShowCV` 脚本就退出 1**——构建不完整或服务器没起来。不要报告成功。可选参数：`--headless`、`--close`、`--browser <exe>`。
-
-**第 3 步——向用户报告**:URL、浏览器已打开，以及**怎么停下它**——对第 1 步的后台任务执行 `TaskStop`；浏览器窗口由用户自己关。
-
-然后停下。路径 D 到此结束。
-
-### 阶段 0.5 / 0.6 / 0.7：ShowCV 独立工具（仅在要求时）
-
-**刻意不接入任何路径，也不在进度清单里。** 三个工具都假设阶段 0 已经跑过（服务器起来、浏览器打开），失败也不自己启动。从阶段 0 的 `SHOWCV_READY` 行读 URL——`--url` 故意没有默认值。
-
-```bash
-# 0.5 批量把 Markdown 导入编辑器的简历列表
-python scripts/showcv/import_md.py --url http://127.0.0.1:3090 <文件或目录> [-r] [--dry-run]
-
-# 0.6 把简历导出为图片（可重复的 --id，或 --all；一次调用覆盖一个批次）
-python scripts/showcv/export_images.py --url http://127.0.0.1:3090 [--name N | --id I | --all] \
-    [--mode paginated|flat] [--scale 1|2|3] [--out DIR] [--dry-run]
-
-# 0.7 删除简历——破坏性操作，localStorage 是唯一副本
-python scripts/showcv/delete_resumes.py --url http://127.0.0.1:3090 --name NAME --dry-run
-python scripts/showcv/delete_resumes.py --url http://127.0.0.1:3090 --name NAME --yes
-```
-
-`export_images.py` 在本地把名字解析成 id，所以拼写错误会在导出任何东西之前就失败，而且它会确认文件真地落盘，而不是相信页面的"已下载"文字。`delete_resumes.py` 不带 `--yes` 只打印计划；带 `--yes` 先做备份（打印恢复命令），走站点自己的确认页，如果那里的名字与它解析出来的不一致就中止。与 `/export` 不同，缺失的 `id` 绝不会被当作"当前这份简历"。
-
-### parse —— 简历文件 → profile.json
-
-先问简历文件路径，然后一条命令：
-
-```bash
-python scripts/pipeline.py "简历.pdf"
-```
-
-PDF / Word / md / markdown / txt。它把 `resume_text.txt`、`profile.json` 和 `profile_validation.json` 写进一个全新的运行目录。**不要为了"检查"一次干净的 parse 而去读简历**——校验器已经做过了，而这段文本只会为毫无新信息地花掉上下文。只有当校验器退出 1、某条 hint 看起来像真实的遗漏、或用户要求彻底检查时，才去读 `resume_text.txt`。
-
-`profile_validation.json` 就是那个校验器的输出。parse 阶段退出码 1 表示简历里出现了一个已知的技术术语却没进 profile——那是一次字典查找（`KNOWN_TECH_TERMS`），是这里唯一不依赖产生 JSON 的那个模型的信号。它在 `hints` 下打印的任何东西（未匹配的项目/公司名、稀薄的技能类别）都来自宽松的正则：读 hints，别照做，也别让某一条变成闸门。单独重跑它：
-
-```bash
-python scripts/stages/validate_profile.py {run_dir}/resume_text.txt {run_dir}/profile.json
-```
-
-需要确认某个具体字段时用 `read_thin.py --kind profile`。**你绝不手写 `profile.json`。**
-
-### infer —— profile.json → crawl_params.json
-
-`crawl_params.json` 是**必须的**，不是优化：`crawl` 用它的 argv 构建参数，`match` 从它读 `match_mode`/`top_n`。跳过这个阶段意味着爬取无法启动，匹配会静默回退到 quick 模式。
-
-**默认给 3–4 个关键词，别更少。** 爬取时间与关键词个数成线性，但稀薄的池子比长得多的难关更糟——1 个关键词 + 应届生筛选 曾经只爬出 19 行，浪费了整整一次运行；4 个关键词 + 经验不限拿到了 197。所以默认给宽，把关键词花在区分度高的概念上（`AI应用开发` 和 `大模型应用开发` 是同一个搜索），让匹配阶段的打分来做收窄。小市场是唯一要削减（2–3）的理由，即便如此也要封顶在城市预算之内（`infer_params.py` 里的 `keyword_budget`：3 个 小城市 / 5 个 一线）。
-
-用**两次** `AskUserQuestion` 调用加一次小小的后续来确认（每次最多 4 个问题）：
-
-1. **爬取与匹配核心** —— 城市、关键词（多选，默认 3-4 个）、匹配模式（quick/deep）、deep 的 Top-N。
-2. **列表筛选** —— 经验、职位类型、薪资下限、公司规模。**这些枚举筛选全部用多选**（`multiSelect`），用户可勾多个档位（如经验 `经验不限`+`应届生`、职位类型 `全职`+`实习`）。经验勾了 `经验不限` 就原样传 `--experience 经验不限`（只筛明确标注经验不限的岗位）；一个都不勾（`不筛选`）才省略该 flag（所有经验档位全要）。其余筛选第一个选项是适合候选人的默认，接受即一次点击；留空一个就跳过该筛选。
-3. **数量（`count` + `min_count`）** —— 单独一次小后续问两个纯度量：它们不是列表筛选，是时长/充足性阈值，所以不混进第 2 批。
-   - **`count`：每城市每关键词爬几条的上限，默认 45**（可选 0 = 关闭限制）。它是爬取时长的最大杠杆，因为要乘以关键词×城市——`--count 45` 配 3 关键词 2 城市最多 270 条。默认给 45 是保守抓一轮看密度；等池子证明够宽、或你想快速验证时再收窄。
-   - **`min_count`：低于它就算稀薄，默认约 10**，0 关闭检查。
-
-然后把每个确认过的值作为 flag 传进去。**模型在这里是兜底，不是主流程**：`infer_params.py` 只对「你没用 flag 指定的字段」调模型，你指定过的字段一律以你的值为准。分两层：
-
-- **核心参数（`keywords` + `city`）给齐 → 整个阶段一次模型都不调**。这俩是模型推断的主体（读简历推城市/关键词），命令行两个都给时它直接跳过 `chat_json`（`infer_params.py:433` 的 `manual_core`）。所以只要你还想省这次调用，就把城市和关键词都从用户那里问到。
-- **其余字段（`degree`/`experience`/`salary`/`job_type`/`scale`/`min_count` 等）**：传了 flag 就用你传的（`apply_overrides` 覆盖），没传才保留模型推断的结果。用户确认过的值是第一手真相，模型只填补用户没管的缝。
-
-```bash
-python scripts/pipeline.py --from infer --city 太原 --keywords "AI应用开发,Python,后端开发,全栈" \
-    --match-mode deep --top-n 10 --count 45 --degree 本科 \
-    --job-type 全职 --salary 5-10K --min-count 10
-```
-
-可接受的筛选值——下面这些中文标签就是全集（`boss_crawler/config.py:42-89`）。无法识别的值会被**警告并跳过**，这会让该筛选静默丢失而不是失败，所以这里的拼写错误会悄悄把搜索范围放宽：
-
-| flag | 可接受的值 |
-|---|---|
-| `--job-type` | `全职` `实习` `兼职` ——**没有 `校招`** |
-| `--salary` | `3K以下` `3-5K` `5-10K` `10-20K` `20-50K` `50K以上` |
-| `--experience` | `在校生` `应届生` `经验不限` `1年以内` `1-3年` `3-5年` `5-10年` `10年以上` |
-| `--degree` | `初中及以下` `中专/中技` `高中` `大专` `本科` `硕士` `博士` |
-| `--scale` | `0-20人` `20-99人` `100-499人` `500-999人` `1000-9999人` `10000人以上` —— 从不推断，只给定 |
-
-**`经验不限` 是真实筛选值，必须原样传 `--experience 经验不限`，绝不能被「不限」两个字当成跳过。** BOSS 里它和「不筛选」是**两个不同的查询条件，结果集不同**：`经验不限` 只返回发布时明确标注「经验不限」的岗位（不要求任何经验）；「不筛选」（省略 flag）返回所有经验档位（在校生/应届/1-3年/3-5年…全要）。只有用户明确选了**不筛选**（该选项留空）才省略 flag。**`--city` 是例外，而且它也是唯一必须要有值的字段**：全国是一个*城市值*，所以要写出来（`--city 全国`，或 `不限`）。省略 `--city` 会退出 1，而不是悄悄全国搜索。关键词模型通常能推断；城市它不能。
-
-`--count` 是**每个城市每个关键词**的上限，所以它要乘以关键词 × 城市，是爬取时长的最大杠杆——`--count 45` 配 3 个关键词 2 个城市，最多 270 个岗位，不是 45。**infer 阶段会问它，默认 45**（0 = 关闭限制）；爬虫 CLI 自身默认仍是 0 = 不限，但主代理在 infer 确认时拿到的值会以 `--count N` 盖过去。（如果你直接调用爬虫，它的 `-c all` 表示*374 个城市一个一个爬*——几乎从不是任何人想要的。）
-
-然后把答案保存下来，这样下次运行可以重放（路径 C）。这会写入整组，所以这里用 `--replace` 是对的；之后单字段微调就去掉这个 flag 走合并：
-
-```bash
-python scripts/preferences.py save --replace --city 太原 --keywords "AI应用开发,Python,后端开发,全栈" \
-    --match-mode deep --top 10 --count 45 --degree 本科 \
-    --job-type 全职 --salary 5-10K --min-count 10
-```
-
-**即使推断看起来毫无歧义，也要保留这道闸门。** 爬取是透过用户自己登录的浏览器驱动的对外动作：参数错了，代价是一次漫长的爬取加一批没用的数据，而且没有任何可撤销的东西。这里被压缩掉的是多轮输入，不是确认本身。
-
-### crawl —— → assets/post_data/**.csv（路径 A、C）
-
-先登录。这一步天然是交互式的，跑在前台：
-
-```bash
-python scripts/stages/boss_post_interactive.py --ensure-login
-```
-
-`[LOGIN_OK]` → 浏览器关闭，继续。`[LOGIN_NEEDED]` → 浏览器保持打开，用户登录后告诉你 已登录，然后重跑。登录状态保存在 `assets/chrome_user_data/`。
-
-然后爬取——**后台任务，几十分钟**，argv 由 `crawl_params.json` 构建：
-
-```bash
-python scripts/pipeline.py --from crawl
-```
-
-之后下限检查自己跑：阈值来自 `crawl_params.json` 里的 `min_count`，`--min-jobs N` 只覆盖它。缺失 `crawl_summary.json` 意味着**什么都没爬到**——爬虫在检测到已登出会话时会以 0 退出，所以光靠退出码看不出来。当下限触发时，**停下问用户**——换关键词 / 放宽筛选 / 接受现状（继续，`--min-jobs 0`）——而不是拿着稀薄的池子硬往下走。小城市爬取可以合理地提前结束；这正是这个检查要暴露的情况，而不是要覆盖掉。
-
-行数只是岗位数的上界，而且它数的是**整个 `assets/post_data/` 池子**，不只是本次运行：一个命中三个关键词的岗位会被写三次，加载时去重。你需要的每个筛选值都在上面的表里。
-
-### 公司定向采集（-m company → 某公司全部在招岗）
-
-想定向抓**某家公司的全部在招岗**（而不是关键词搜到什么算什么）时，用爬虫的第三种模式：
-
-```bash
-python scripts/stages/boss_post_interactive.py -m company -p "字节跳动,腾讯" -c "全国" -n 30 -d -y
-```
-
-`-c` 可给指定城市（分公司）或 `全国`；`-d` 连详情 → `公司信息` 列由详情接口的 `brandComInfo` 回填公司简介。产物写到 `assets/post_data/company/{公司}_{城市}.csv`，字段与关键词爬完全同构（`CSV_FIELDS`）。**这就是喂给「路径 B」的现成 CSV**：一份简历 + 这份采集 → `parse` → `infer` →（跳过 crawl）→ `--from match` → match/deep/merge → `gate:jobs` → `materials` → `render` → `gate:send` → `apply.py --yes`，匹配/投递侧零改动。实现用搜索接口 + `brandName` 精确过滤（无需联网校准、即时可用）；「品牌主页逐页抓满」的精确增强见 `references/cli.md` 公司定向节。
-
-### match → deep → merge —— 打分与报告
-
-一条命令覆盖全部三个；quick 模式下 `deep`/`merge` 是空操作：
-
-```bash
-python scripts/pipeline.py --from match          # deep 模式：后台任务，每个岗位一次请求
-```
-
-- **quick** —— 基于规则的 6 维打分（0-115 分），数秒，零 token 成本。
-- **deep** —— 规则预筛到 Top-N，然后每个候选一次模型请求，再做一次合并，把规则分（40%）与模型分（60%）融合、重新分类并重新生成报告。
-
-两者都写 `matching_report.html` 和 `qualified_jobs.json`（投递池 = 符合 + 需优化，用原始爬取字段）。**绝不手写 `qualified_jobs.json`。** 也别自己调 `generate_html_report()`——脚本已经调过了，而且 CLI 运行之后你手里也没有它需要的那个对象。
-
-为用户打开报告：`Invoke-Item {run_dir}\matching_report.html`（PowerShell）或 `start {run_dir}/matching_report.html`（Bash）。**你消费 `application_category` 和 `match_score`，你绝不去重算它们。**
-
-每个岗位带三个 `application_category` 值之一——枚举是英文，报告是中文，而 `read_thin.py --kind jobs` 和 `--kind ranked` 都打印原始枚举，所以跟用户说话时你自己翻译：
-
-| 枚举 | 中文 | 含义 |
+| 阶段 | 一句话摘要 | 参考文件 |
 |---|---|---|
-| `qualified` | 符合 | 没碰到硬闸门，技能和经验已在 |
-| `need_optimization` | 需优化 | 没碰到硬闸门，差距可弥合——包括 经验差 1–3 年 / 薪资差 3–8K |
-| `cannot_apply` | 不可投递 | **打中了硬闸门** |
-
-只有三件事会落到 `cannot_apply`，而且总分永远盖不过它们（`resume_matcher/scoring.py:320-354`）：学历低于 JD 的要求、经验差距 ≥ 3 年、或薪资差距 > 8K。绝不要把中档岗位说成 不可投递。
-
-**deep 模式每个岗位发一次请求，所以部分失败是常态。** `deep` 退出 **3** 表示结果文件已写但部分 rank 缺失——用 `--resume` 补齐，而不是重跑整个阶段：
-
-```bash
-python scripts/stages/deep_analyze.py <run_dir> --resume    # 跳过 deep_results.json 里已有的 rank
-```
-
-`deep_results.json` 靠 **`rank`** 映射回候选，而不是靠 `job_id` 或 link——那是唯一的对齐键，一旦 rank 错位，就会把某岗位的分析安到另一个岗位上而没有任何地方报错。`read_thin.py --kind ranked` 已经做这个连接了；用它而不是自己重建。
-
-### gate:jobs —— 一个问题，三个轴
-
-先展示表格（`read_thin.py --kind ranked` 把分数 + 判定 + 公司 + 职位放一张表，或 `--kind jobs` 拿爬取列——绝不 `Read` 文件），然后**一次** `AskUserQuestion` 覆盖三个互相独立的抉择：
-
-`--kind jobs` 打印的三列是决策信号，不是细节——把它们放进表格里，而不是让用户在死岗位上瞎选：
-
-- `已失效=是` —— BOSS 返回了 `invalidStatus=true`；投了也白投，把它从范围里拿掉
-- `代招=是`，或 `HR公司` ≠ `公司` —— 联系人是猎头/外包，不是雇主自己的 HR
-- 三者都是**三态**：空值表示 未采集（爬取是没带 `-d` 跑的），绝不是 否
-
-| 轴 | 选项 |
-|---|---|
-| 投递范围 | 投哪些岗位（岗位选择不影响另外两个） |
-| 招呼语生成方式 | 自定义 / 默认模板 / AI生成 |
-| 是否发送图片 | 自定义上传 / AI调整（渲染长图） / 不发送 |
-
-把答案映射成 flag，而不是事后编辑文件：
-
-| 答案 | 如何执行 |
-|---|---|
-| 投递范围 = 子集 | 在 `materials` **和** `render` 上用 `--only 1,3,5-7`（对 `qualified_jobs.json` 从 1 开始计数的下标）——别去改文件 |
-| 招呼语 **自定义** | 把文字写进每个选中的 `i` 的 `{run_dir}/materials/greeting_{i}_custom.txt`，然后用 `--greeting-mode skip` 跑 materials…或把模式留在 `ai`：已存在的非空产物会被跳过，绝不覆盖 |
-| 招呼语 **默认模板** | `--greeting-mode default`（规则模板，不调模型） |
-| 招呼语 **AI生成** | `--greeting-mode ai`（默认） |
-| 图片 **自定义上传** | 校验路径，`--resume-mode skip`，发送时 `apply.py --image <path>`。`skip` 也会抑制 `render`——生成的 PNG 反正不会被发送 |
-| 图片 **AI调整** | 默认：`materials` 写简历 JSON，`render` 把它变成长图 |
-| 图片 **不发送** | `pipeline.py --no-images`，发送时 `apply.py --no-image` |
-
-**招呼语的前 15 个字是大多数 HR 唯一会看到的部分。** BOSS 的消息列表预览在那里截断，所以 `您好，我是…` 把整个窗口都浪费在废话上了。规则和各场景公式在 `scripts/prompts/greeting.st`——唯一来源，别转述。
-
-`materials` 已经守住了 **AI** 路径：它跑检查，花一次额外调用把糟糕的开头重新前置，并打印 `N 条招呼语的前 15 字被客套话占掉，已重写：…`。别再去复查那些。有三种情况留着没守住——你自己查，从包里导入（不是裸 `auto_apply`）：
-
-```bash
-python -c "from resume_matcher.auto_apply import has_wasted_preview; print(has_wasted_preview(open('X.txt',encoding='utf-8').read()))"
-```
-
-- `--greeting-mode default` —— 离线模板路径从不检查
-- 用户手动打的一段自定义文字 —— 从不检查
-- 一段重试也失败了的 AI 招呼语 —— 原样保留，且**不会**出现在那行打印里
-
-如果检查失败，说出来并提供重新前置，但**绝不静默改写用户提供的招呼语。**
-
-### availability —— 到岗三样，缺就问（条件停点）
-
-**只有要给「AI 招呼语」送往岗时才走这一步**（`gate:jobs` 里选了 AI 生成招呼语，即默认）；`--greeting-mode default` 和自定义招呼语不消费它，就别问。
-
-到岗三样（可到岗 `can_start` / 可实习时长 `duration` / 每周出勤 `days_per_week`）是 HR 会照此排期入职的**承诺**，招呼语里不许编。`materials` 阶段的 AI 招呼语提示词是**动态组装**的：`profile.basic_info.availability` 有值才把到岗段拼进去，没值整段不出现——所以如果你简历原文没写、parse 又没提出来（三项 null），招呼语就一个都写不了，得靠你问用户补一次真值。
-
-先用 thin 视图读，别 `Read` profile.json：
-
-```bash
-python scripts/utils/read_thin.py <run_dir>/state/profile.json --kind profile
-```
-
-若 `basic_info.availability` 的**三项全为 null/空** → 一次 `AskUserQuestion`（≤4 选项规矩照旧）问可到岗时间 / 可实习时长 / 每周可出勤天数；拿到答案后用 `set_availability.py` 写回 profile（**绝不手改 profile.json**——那是显式 null、get 默认值不生效的坑）：
-
-```bash
-python scripts/stages/set_availability.py <run_dir> \
-    --can-start "随时" --duration "6个月" --days-per-week "5天"
-```
-
-三项任一句都不给就是允许 `materials` 一个到岗段都没有——那是用户自己的选择，尊重它，别再追着问。非 null（简历原文写了，parse 提出来了）→ 这一停点直接跳过，不打扰。
-
-### 计划征询 —— 简历怎么改，用户先点头（条件停点）
-
-**只有走 AI 简历优化时才走这一步**（`gate:jobs` 里图片方式选了待 AI 调整，即默认）；图片=原简历、`--resume-mode skip`、自定义简历图都不消费它，直接进 `materials`。
-
-把原本 `materials` 里「一口气做完的 AI 简历改写」拆成**先出计划、用户点头、再照点头的结果改写**两步。计划阶段的 `must_add`（简历缺、JD 又强烈要求的新内容）AI 严禁编造，只能由你本人补真内容——所以这一步是先问清楚，不是走过场。
-
-一个岗位走完这一停点，会留下两类文件：`materials/plan_{i}_{公司}.json`（调整计划）和 `materials/decision_{i}.json`（你的决定）。`{i}` 是 `qualified_jobs.json` 里从 1 起的下标，和 `resume_`/`greeting_` 同一个对齐键。
-
-**① 计划阶段**（headless，对刚批准的岗位跑，不写简历）：
-
-```bash
-python scripts/stages/gen_materials.py <run_dir> \
-    --only 1,3,5 --greeting-mode skip --resume-mode plan
-```
-
-每岗位写一份 `plan_{i}_{公司}.json`，含 `chapter_plan`（章节保留/顺序）和 `optimization_suggestions`（`must_add`/`should_adjust`/`keywords_to_emphasize`/`format_suggestions`）。
-
-**② 展示摘要**——用薄视图读，别 Read 计划原文件：
-
-```bash
-python scripts/utils/read_thin.py <run_dir> --kind plans
-```
-
-**③ 每岗位 `AskUserQuestion`（第一层摘要）**：给用户看 `index` + 公司 + 职位 + `must_add`/`should_adjust` 概览，问 **整套采纳 / 逐条细看 / 不用AI优化**（+ 其他）。
-
-**④ 「逐条细看」才下钻（第二层）**：对 `must_add` 的每条，`AskUserQuestion` 问 **我补充真实内容（用"其他"贴内容）/ 放弃该条**；`should_adjust`、`keywords` 每条问 **按建议改 / 保留原样**。受一次 ≤4 问题、每问题 ≤4 选项的上限约束，点多就拆多轮。你补的内容必须是你真的做过、简历拿得出的——填不了就放弃，别让 AI 替你圆。
-
-**⑤ 决定落盘**（CLI 原子写 `decision_{i}.json`，主循环绝不手改）：
-
-```bash
-python scripts/stages/set_plan_decisions.py <run_dir> --index 3 --approved
-python scripts/stages/set_plan_decisions.py <run_dir> --index 3 \
-    --suggestions '{"must_add":[{"section":"专业技能","content":"..."}],"should_adjust":[]}'
-python scripts/stages/set_plan_decisions.py <run_dir> --index 3 --reject \
-    --fallback-image "C:/my/简历.png"
-```
-
-`--approved` 整套采纳；`--suggestions` 传过滤/改写过（含你补的真内容）的；`--reject` 该岗位不用 AI 优化，可带回退图（自定义简历图或原上传简历，留给 `gate:send` 当附件）。
-
-**⑥ 应用阶段**（headless，只对已批准岗位出简历）：
-
-```bash
-python scripts/stages/gen_materials.py <run_dir> \
-    --only 1,3 --greeting-mode skip --resume-mode apply
-```
-
-被拒岗位（`decision_` 里 approved=false 或无 decision）**不生成** `resume_{i}.json`——这不是失败，是设计。它的招呼语照常生成，不受连坐。
-
-**⑦ 顺着走**：`render --only <已批准>`（被拒岗位没有 resume json，别让它被当「部分缺图」退 3）；落盘 md 只建已投岗的 deliver 目录；到 `gate:send` 时被拒岗位的附件走 decision 里的 `fallback_image`。
-
-`--resume-mode ai`（两阶段合并路径）保留作高级/评估用，不在常规流程里走它。
-
-### materials —— 招呼语 + 优化后简历
-
-```bash
-python scripts/pipeline.py --from materials --only 1,3,5     # 后台任务
-```
-
-每个岗位两次模型请求（招呼语 + 简历改写），所以这是对用户刚批准的岗位列表花钱的阶段——这正是 `gate:jobs` 先行的原因。产物是 `materials/greeting_{i}_{company}.txt` 和 `materials/resume_{i}_{company}.json`，其中 `{i}` 是 `qualified_jobs.json` 里从 1 开始计数的下标。**这个下标是下游一切的对齐键**，所以一个失败的岗位会留下空隙，而不是把后面的都错位。
-
-部分成功退出 3，不是 1。检查并只补齐缺失的——已存在的非空产物会被跳过，绝不覆盖（`--force` 才覆盖）：
-
-```bash
-python scripts/check_artifacts.py {run_dir}
-python scripts/stages/gen_materials.py {run_dir} --only 4        # 只补那个失败的
-```
-
-**材料失败的岗位会从批次里剔除，而不是无限重试。** 把它从 `render` 和投递列表里排除，并在 `gate:send` 告诉用户。
-
-### verify —— 模型有没有凭空造技能？
-
-**默认关闭**：整轮 `--to render` 不会自动查材料。要查就显式加 `--verify`，或把起点设成它（`--from verify` 本身就带查的意图）。一条带核查的整轮：
-
-```bash
-python scripts/pipeline.py {简历.pdf} --to render --verify     # 整轮连材料核查一起跑
-python scripts/pipeline.py --from verify                        # 只查这一环（自检，不拦下游）
-```
-
-它既做字符串比对，也调模型处理缩写 / 同义词 / 中英等价这些比对做不到的语义问题——所以按词烧模型，才默认关闭。它收集真正会被送出去的文本里的每个技术术语——`optimized_resume` 和招呼语——并报告那些在 `resume_text.txt` / `profile.json` 里没有依据的。一次悄悄加进 PyTorch 或 Kubernetes 的简历改写是本 skill 最糟糕的失败模式：用户带着它去面试，却答不上来。
-
-**退出 1 表示它发现了问题，不是它坏了。** 流水线故意在 `render` 之前停下——长图一旦存在，材料读起来就是定稿。每个命中都带着周围上下文打印出来，好让人判断；然后选两条路之一：
-
-```bash
-# 确系编造 → 重新生成那些岗位
-python scripts/stages/gen_materials.py {run_dir} --only 1,3 --force
-# 站得住脚（它*确实*在简历里，只是措辞不同）→ 加白名单并继续
-python scripts/pipeline.py --run-dir {run_dir} --from verify --to render --allow PyTorch,nginx
-```
-
-**不要自作主张打开 `--verify` 或传 `--allow`**——两者都是用户的决定：前者让这文件 1 道闸门真的去烧模型拦 render，后者以材料出门告终。把列表展示出来并询问。（`apply.py` 有一个不相关又同名充满歧义的 `--skip-verify`，用于*图片*健康检查；别把关于一个的决定搬到另一个身上。）
-
-它抓不到的：夸大其词。「了解」被改写为「精通」、三个月实习被拉长到一年、一种不像用户的语气——任何术语匹配都发现不了这些，所以 `gate:send` 仍然意味着要读材料。还有两个值得知道的局限：它只评估拉丁字母词（像 多智能体面试系统 这样的中文短语永远不登记），而且 `optimization_suggestions` 刻意排除在外，因为给一份简历提出它缺的技能正是那个字段的全部工作。
-
-退出码：`0` 干净 · `1` 有发现，或没有基准 / 没有可检查的材料（没检查不等于干净）· `2` 坏的 `--only` · `3` 跑完了但有些材料不可读——那些从没被检查过，所以你自己读。
-
-它写 `verify_report.json`，记录它检查了哪些文件以及什么 mtime，这正是 `where_am_i.py` 知道该阶段跑没跑过的方式——也在一份材料被重新生成时知道某个 `✅` 已经过期。一次 `--only` 运行不写报告（子集结果会把没检查过的文件标记成已检查）。
-
-### render —— 简历长图
-
-```bash
-python scripts/pipeline.py --from render --only 1,3,5
-```
-
-**设计上就是串行——没有 `--workers`。** 所有简历共用一个浏览器、一个 origin 和一个 `localStorage`；并发只会让它们互相踩踏。脚本在调试端口 9333 被一个 `--user-data-dir` 不是 `assets/showcv_profile` 的浏览器占住时拒绝运行——那个端口可能是持有用户真实简历的*被接管的*浏览器。绝不要替用户传 `--adopt-browser`。
-
-当用户选了 不发送 时，用 `--no-images` 整个跳过该阶段。
-
-**附件文件名是 `<姓名>-<应聘岗位>`，所以这个阶段需要一个真名。** 当 `profile.json` 的 `basic_info.name` 为空或占位符（`未提取` / `未知` / `无` / …）时，脚本退出 1，而不是渲染一张 `未提取-Python工程师.png`——HR 会看到那个字符串。传 `--name "真实姓名"`（`apply.py` 上有同一个 flag）。这里的退出码：`0` 每张图都渲染了，`1` 前置条件失败且什么都没跑，`3` 阶段跑完但部分岗位没有图——在 `gate:send` 之前检查是哪些。
-
-### 岗位信息+招呼语.md 自动落盘，然后看一眼
-
-`岗位信息+招呼语.md` **不需要你动手** —— `materials` 阶段跑完会自动跑 `write_application_md.py`，为本次 `--only` 选中的岗位写 `deliver/{company}-{position}/岗位信息+招呼语.md`（所有爬取字段加招呼语；绝不手写），同时落盘 `优化建议.md` 和优化简历正文 md（`<姓名>-<岗位>.md`，取自该岗位 `materials/resume_#.json` 的 `optimized_resume`，与 render 出的长图同名同目录）。**只给要投的岗位建 deliver 文件夹**：`--only` 给了就只建那几家；没给才退回 `--all` 写全部 qualified 岗位。它挂在 materials 而非 render 上，所以 `--resume-mode skip` / `--no-images` 跳过渲染时也照写。简历正文想看薄格式就用 `read_thin.py` 读 `materials/resume_#.json`。
-
-长图检查也不用你动手 —— `render` 阶段跑完会自动跑 `verify_image.py "{run_dir}/deliver" --all`，把十几行数字打到屏幕上给你读。单独跑仍然可用（不用走整条流水线时）：
-
-```bash
-python scripts/verify/verify_image.py "{run_dir}/deliver" --all
-```
-
-`verify_image.py` 是你检查图片的方式：它返回十几行数字，而不是一张 639k token 的截图。如果用户想看某一张，把路径给他们，让他们自己打开。
-
-### gate:send —— 批准，然后投递
-
-一次 `AskUserQuestion`：全部投递 / 返回修改 / 取消投递。然后，也只有在这之后：
-
-```bash
-python scripts/deliver/apply.py "{run_dir}"                # 干跑：打印列表，不碰浏览器
-python scripts/deliver/apply.py "{run_dir}" --yes          # 发送
-```
-
-**`--yes` 是本 skill 里唯一不可撤销的一步**——一条已发送的消息瞬间到达、无法撤回。永远先干跑并把那份列表展示出来。`gate:send` **不可合并、不可预设**：它必须看到实际落到磁盘的材料，所以不能提前，任何保存的偏好都不能替代它。`pipeline.py` 从不运行 `apply.py`，即使带 `--to render` 也不。
-
-有用的参数：`--only 1,3,5`、`--company 百度,棱镜数聚`、`--max N`、`--image <path>`、`--greeting <文本>`、`--greeting-file <文件>`、`--no-image`、`--name 张三`。`--image` / `--greeting` / `--greeting-file` 都是**整批统一一份**：给了就对选中的每个岗位用它，覆盖各自的长图和招呼语；不逐岗位给不同值。结果落在 `{run_dir}/apply_log.json`。三个检查拒绝发送而不是警告——缺招呼语、缺/空附件图片、运行目录不可读。
-
-其中两个参数会咬人：
-
-- **`--company` 是全有或全无。** 一个匹配不到任何东西的名字（拼写错误、池子里存的是简称却给了全名）会退出 1 并发送给*零个人*，包括那些确实匹配上的公司。名字对池子做子串匹配；干跑会打印一份你能传的确切菜单。
-- **`--max N` 取 `qualified_jobs.json` 顺序的前 N 个，而那个顺序是 符合 在前、需优化 在后，每组内部不按分数排序**（`deep_analysis.py:377` 写的是原始列表；只有报告里的副本会被排序）。所以 `--max 5` 不是"最好的 5 个"。如果用户要最好的 N 个，传从报告读出来的显式 `--only` 下标。HR 活跃优先的排序属于库的入口点 `auto_apply.apply_to_jobs(max_applications=…)`，**不属于**这个 CLI。
-
-## references/ —— 留下的那一份文档
-
-**一次运行需要的一切都在本文件里。** `references/` 下唯一的文档是 `cli.md`，命令行路径参考。如果你发现自己正要用 shell 命令去探一个*常量*——一个合法值、一个键名、一个退出码——它就在本文件，上面。
+| 阶段 0 ＋辅助 | 启动 ShowCV 简历编辑器（路径 D）；0.5/0.6/0.7 导入/导出/删除 | [01-showcv.md](references/stages/01-showcv.md) |
+| parse | 简历文件 → profile.json（不手写、不 Read 干净文本） | [02-parse.md](references/stages/02-parse.md) |
+| infer | 确认爬取/匹配参数 → crawl_params.json（两次打包提问） | [03-infer.md](references/stages/03-infer.md) |
+| crawl | 登录 + 后台爬取 + 下限检查（路径 A、C） | [04-crawl.md](references/stages/04-crawl.md) |
+| 路径 E | 公司定向采集 → company/ CSV（不碰流水线） | 见 [04-crawl.md](references/stages/04-crawl.md) 路径 E 节 |
+| match | → deep → merge → 报告 + qualified_jobs.json | [05-match.md](references/stages/05-match.md) |
+| gate:jobs | 一个问题，三个轴：投哪些 / 招呼语 / 图片 | [06-gate-jobs.md](references/stages/06-gate-jobs.md) |
+| availability | 到岗三样（条件停点，仅 AI 招呼语送往岗时） | [07-availability.md](references/stages/07-availability.md) |
+| 计划征询 | 简历怎么改，用户先点头（条件停点） | [08-plan.md](references/stages/08-plan.md) |
+| materials | 招呼语 + 优化后简历 | [09-materials.md](references/stages/09-materials.md) |
+| verify | 模型有没有凭空造技能？(退出 1 = 发现了) | [10-verify.md](references/stages/10-verify.md) |
+| render | 简历长图（串行，无 --workers） | [11-render.md](references/stages/11-render.md) |
+| gate:send | 批准，然后 `apply.py`（唯一不可撤销一步） | [12-gate-send.md](references/stages/12-gate-send.md) |
+
+> **只读你即将驱动的那个阶段参考**，别把它们一次全读完——读满 12 份就把拆分省下的上下文又填回去了。`where_am_i.py` 会告诉你当前该读哪一份。
+
+## references/ —— 需要时才翻的文档
 
 | 文件 | 读者 / 触发时机 |
 |---|---|
-| [cli.md](references/cli.md) | **故障排查。** 一条命令以本文件无法解释的方式失败，或你需要一个上面没列出的 flag |
+| [cli.md](references/cli.md) | **故障排查。** 一条命令以本文件或某阶段参考无法解释的方式失败，或你需要一个上面没列出的 flag |
+| [stage 参考](references/stages/01-showcv.md) | **阶段细节。** 驱动对应阶段前读（见上表）；不过只要你正在跑它就应该已经读过了 |
 
 ## 关键原则
 

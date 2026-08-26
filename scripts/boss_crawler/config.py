@@ -167,13 +167,13 @@ class SleepConfig:
     """
     def __init__(self):
         self.enabled = True  # 是否开启sleep等待
-        self.page_interval = 3  # 列表页之间的基础等待（秒）
+        self.page_interval = 1.4  # 列表页之间的基础等待（秒）——真实 = 1.4 + uniform(0,0.6) ≤2s
         self.detail_interval = 3  # 详情页之间的基础等待（秒）——走浏览器，0.5s 会触发风控
         self.scroll_wait = 2  # 滚动后的等待时间（秒）
         self.login_wait = 2  # 登录检测后的等待时间（秒）
-        self.retry_wait = 2  # 重试等待时间（秒）
+        self.retry_wait = 1.0  # 重试等待时间（秒）——真实 = 1.0 + uniform(0,0.6) ≤2s
         self.api_wait = 5  # API响应等待时间（秒）
-        self.jitter = 2.0  # 随机抖动上限（秒）：真实等待 = base + uniform(0, jitter)
+        self.jitter = 0.6  # 随机抖动上限（秒）：真实等待 = base + uniform(0, jitter)；0.6s 既保随机性又让 page/retry 落在 ≤2s
         self.detail_batch = 30  # 每 N 个详情请求后进入一次分批冷却
         self.batch_cooldown = 30  # 分批冷却时长（秒）
 

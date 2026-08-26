@@ -24,16 +24,18 @@ if IS_WINDOWS:
 
 def check_login_elements(page):
     """检测登录相关元素（旧版回退逻辑）"""
-    login_elements = page.eles('css:.login-btn, css:.scan-login')
-    if login_elements:
-        return True
-
-    verify_elements = page.eles('css:geetest_radar_tip, css:.geetest_panel')
-    if verify_elements:
-        return True
-
+    # URL 判断零开销，命中即返回，不碰 DOM。放在最前面可以跳过下面可能阻塞的查询。
     current_url = page.url
     if 'login' in current_url.lower() or 'security-check' in current_url.lower():
+        return True
+
+    # 元素查询各自带短超时：DrissionPage 在页面未加载完时会阻塞等待页面加载，
+    # BOSS 列表页常年有轮询/长连接，默认 timeout（约 10s）会把每次查询都拖到满秒。
+    # 给明确的短超时，把最坏耗时压在上限内；元素在场时毫秒级就能返回。
+    if page.eles('css:.login-btn, css:.scan-login', timeout=2):
+        return True
+
+    if page.eles('css:.geetest_panel', timeout=2):
         return True
 
     return False
@@ -81,7 +83,7 @@ def check_page_status(page, response):
     if check_login_elements(page):
         return 'need_login'
 
-    if response is None:
+    if not response:
         return 'no_data'
 
     try:

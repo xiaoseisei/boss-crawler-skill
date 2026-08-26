@@ -27,6 +27,15 @@ from .paths import apply_log_path
 from .utils import ensure_output_dir
 from .scoring import hr_activity_rank, hr_activity_sort_key
 
+# 登录状态检测复用 boss_crawler.auth，不在本模块内嵌 copy（旧 copy 缺
+# check_login_elements 回退，已漂移）。这里只把 scripts/ 塞进 sys.path，不能顶层
+# import boss_crawler.auth：auth → resume_matcher.paths → 本包 __init__ → auto_apply
+# 会构成循环引用（auth 在 import 中途拿不到 check_login_status）。真正的 import 延到
+# 调用时，见下方 check_login_status 的懒加载包装。
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+
 # 计时埋点：stage_timer 在 scripts/ 下（本模块是 scripts/resume_matcher/）。
 # 导入失败一律退化成不计时，绝不影响投递。
 try:
@@ -653,27 +662,13 @@ def _ensure_login(dp: WebPage, max_wait: int = 300) -> bool:
 
 
 def check_login_status(page) -> bool:
-    """
-    通过 XPath 检测 BOSS 直聘页面登录状态。
-    - 已登录: //a[@href='https://www.zhipin.com/web/geek/recommend']//img（用户头像）
-    - 未登录: //a[@class='btn btn-outline header-login-btn']（登录按钮）
-    """
-    try:
-        logged_in = page.eles('xpath://a[@href="https://www.zhipin.com/web/geek/recommend"]//img')
-        if logged_in:
-            return True
-    except Exception:
-        pass
+    """检测 BOSS 直聘登录状态，委托给 boss_crawler.auth（与 crawler 共用同一份判定）。
 
-    try:
-        not_logged_in = page.eles('xpath://a[@class="btn btn-outline header-login-btn"]')
-        if not_logged_in:
-            return False
-    except Exception:
-        pass
-
-    # 都不匹配，保守返回 False
-    return False
+    模块加载期 auto_apply ←→ boss_crawler.auth 循环引用（auth 经 resume_matcher.paths
+    触发本包 __init__ 再回到 auto_apply），所以这里懒加载，第一次调用时才 import。
+    """
+    from boss_crawler.auth import check_login_status as _impl
+    return _impl(page)
 
 
 def auto_apply_jobs(*args, **kwargs):

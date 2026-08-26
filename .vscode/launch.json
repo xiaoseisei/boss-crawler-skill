@@ -71,6 +71,31 @@
             "python": "${workspaceFolder}/.venv/Scripts/python.exe"
         },
         {
+            // 公司定向模式（-m company）：断点可打在页面跳转代码上 ——
+            //   构造详情URL   crawler.py:48
+            //   列表/搜索页跳转 crawler.py:125（company.py 的 query=公司全名 翻页走这里）
+            //   详情页跳转     crawler.py:253/276/282（get_single_job_detail，含 API 直调 + DOM 兜底）
+            //   -p 也支持逗号分隔多家公司；-c 用「太原」「阳泉」，不带「市」。
+            // ⚠ 后台批爬还在跑时（assets/chrome_user_data 同一 profile）不要用它：
+            //   DrissionPage 会静默接管已开浏览器，两个采集互相干扰。批跑完再 F5。
+            "name": "crawler: 公司定向(山西众信通/太原,带详情)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/stages/boss_post_interactive.py",
+            "args": [
+                "-m", "company",
+                "-p", "山西众信通信息科技有限公司,太原市江兴石墨换热设备有限公司",
+                "-c", "太原",
+                "-n", "30",
+                "-d",
+                "-y"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+        },
+        {
             "name": "crawler: 登录检测/扫码",
             "type": "debugpy",
             "request": "launch",

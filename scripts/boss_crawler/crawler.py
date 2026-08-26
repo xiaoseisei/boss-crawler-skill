@@ -152,7 +152,7 @@ def _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen=N
                 continue
 
             time_stats.start_request('api', 'zpgeek/search/joblist.json')
-            r = dp.listen.wait(timeout=5)
+            r = dp.listen.wait(timeout=3)
             status = check_page_status(dp, r)
 
             if status == 'need_login':
@@ -166,8 +166,8 @@ def _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen=N
             if status == 'no_data':
                 time_stats.end_request(False, '无数据')
                 consecutive_no_data += 1
-                if consecutive_no_data >= 3:
-                    print(f"\n连续 {consecutive_no_data} 页无数据，爬取结束")
+                if consecutive_no_data >= 2:
+                    print(f"\n连续 {consecutive_no_data} 次无数据（已重试一次），爬取结束")
                     break
                 print(f"[第{page_num}页] 无数据，等待重试...")
                 sleep_config.sleep('retry')

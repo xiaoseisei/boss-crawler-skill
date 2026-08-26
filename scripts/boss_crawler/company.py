@@ -10,8 +10,9 @@
 返回字段这些离线确定不了（想进品牌页抓"主页上的全部岗"，需要先联网探针校准那张
 契约，而这又需要一次登录）。但**搜索接口**（`/web/geek/jobs?query=…`）是现有爬取
 已经在用、字段键名已经被 `process_job_list` 证实过的（`brandName` / `salaryDesc` /
-`encryptJobId` …）。所以公司模式用 `query=公司全名` 翻页搜索，把返回结果按
-`brandName` 精确过滤掉别的公司，就得到该公司的全部在招岗 —— 无需猜任何新接口。
+`encryptJobId` …）。所以公司模式用 `query=公司全名` 翻页搜索，**直接采用搜索结果
+作为该公司的在招岗**（用户确认 BOSS 搜出来就是对的，不做 brandName 过滤）—— 无需
+猜任何新接口。
 
 代价是这是"搜索接口物理上限内的全部"（BOSS 搜索对全名公司名通常能翻很多页）；若
 某岗位因公司名写法不同而没被这个 query 命中，或候选页数超出 BOSS 搜索分页上限，
@@ -23,7 +24,7 @@
 "公司简介"，不需要额外进品牌页。
 
 流程（对每个 公司 × 城市）：
-  1. crawl_company_jobs: 搜索翻页 + brandName 过滤 + 复用 process_job_list 写 CSV
+  1. crawl_company_jobs: 搜索翻页 + 直接采用搜索结果 + 复用 process_job_list 写 CSV
   2. （with_detail）crawl_job_details 回填详情
 """
 import os
@@ -48,9 +49,12 @@ def company_output_path(company, city):
 def crawl_company_jobs(dp, company, city_code, file_path, count_limit, existing_links,
                        run_seen=None):
     """
-    按公司全名搜索 + 翻页 + brandName 精确过滤，抓该公司的全部在招岗。
+    按公司全名搜索 + 翻页，直接采用 BOSS 搜索结果作为该公司的在招岗。
 
-    Reuses _crawl_paginated（翻页去重到底判定）并把非本公司的岗位滤掉。
+    不再按 brandName 精确过滤：用户确认 BOSS 直聘按公司全名搜出来的岗位就是
+    该公司的在招岗。搜「公司全名」接口返回的岗位即全部写入。
+
+    Reuses _crawl_paginated（翻页去重到底判定）。
     Returns: (total_processed, total_written, total_skipped, total_run_dups)，与
              execute_crawl_iteration 里每个小桶同构。
     """
@@ -58,12 +62,8 @@ def crawl_company_jobs(dp, company, city_code, file_path, count_limit, existing_
     encoded = urllib.parse.quote(company)
     url = 'https://www.zhipin.com/web/geek/jobs?city=%s&query=%s' % (city_code, encoded)
 
-    def _only_company(job):
-        return str(job.get('brandName', '')).strip() == company
-
     print('  访问: %s' % url)
-    return _crawl_paginated(dp, url, file_path, count_limit, existing_links,
-                            run_seen, job_filter=_only_company)
+    return _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen)
 
 
 def crawl_company(dp, company, city_name, city_code, count_limit, with_detail,
