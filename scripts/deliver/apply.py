@@ -113,17 +113,11 @@ def read_greeting_from_md(run_dir, dir_name):
     m = re.search(r'^##\s*招呼语.*$', text, re.MULTILINE)
     if not m:
         return None, None
-    # 标题之后的第一个非空段落即是招呼语正文，写到下一个顶层标题或文件末尾
     body = []
     for ln in text[m.end():].splitlines():
-        line = ln.strip()
-        if not line:
-            if body:
-                break
-            continue
-        if line.startswith('##'):
+        if ln.startswith('##'):
             break
-        body.append(ln.rstrip())
+        body.append(ln)
     greeting = '\n'.join(body).strip()
     return (greeting, md_path) if greeting else (None, None)
 
@@ -383,15 +377,21 @@ def summarize(results):
     """投递结果分档。auto_apply_jobs 的 status: applied / partial / 其他。"""
     applied = [r for r in results if r.get('status') == 'applied']
     partial = [r for r in results if r.get('status') == 'partial']
-    failed = [r for r in results if r.get('status') not in ('applied', 'partial')]
+    skipped = [r for r in results if r.get('status') == 'skipped']
+    failed = [r for r in results if r.get('status') not in ('applied', 'partial', 'skipped')]
 
     print('\n%s' % ('=' * 60))
-    print('  已投出 %d ｜ 仅进输入框未发送 %d ｜ 失败 %d'
-          % (len(applied), len(partial), len(failed)))
+    print('  已投出 %d ｜ 跳过(已沟通) %d ｜ 仅进输入框未发送 %d ｜ 失败 %d'
+          % (len(applied), len(skipped), len(partial), len(failed)))
 
     attached = [r for r in applied if r.get('attachment_sent')]
     if applied:
         print('  其中带附件成功 %d 个' % len(attached))
+    if skipped:
+        print('  🛡 路由门禁拦截跳过（避免重复打扰）: %d 个' % len(skipped))
+        for r in skipped:
+            comp = (r.get('job') or {}).get('公司') or r.get('company') or '未知公司'
+            print('     · %s: %s' % (comp, r.get('error') or '历史已沟通'))
     if partial:
         print('\n  ⚠ 下面这些招呼语只填进了输入框、**没有发出去** —— '
               '打开对话框自己按一下回车：')

@@ -5,6 +5,8 @@
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-Skill-orange.svg)](https://claude.ai/code)
 
 > 🚀 **这是一个 Claude Code Skill** — 在 Claude Code 中输入 `/boss-crawler` 即可启动完整的求职自动化流程。
+>
+> 💡 **Fork 拓展说明**：本项目 Fork 自上游开源项目 [zhansan379/boss-crawler-skill](https://github.com/zhansan379/boss-crawler-skill)。在完全保留上游**爬取、解析、智能匹配、可视化报告与基础投递**的基础上，拓展了一套专为真实批量投递设计的**高健壮性自动化投递工作流引擎（Delivery Workflow）**，补齐了状态机双重硬断言、页面浮层清障、漏发熔断与成功记账等工业级能力。
 
 ## 🆕 最近更新
 
@@ -191,6 +193,49 @@ python scripts/deliver/apply.py "D:\Project\pythonProject\boss-crawler-skill\ass
 
 ---
 
+### 🚀 进阶拓展：高健壮性自动化投递工作流 (Delivery Workflow)
+
+> 📖 **架构设计详见**：[docs/delive_workflow.md](./docs/delive_workflow.md)  
+> 📋 **日常投递 SOP**：[docs/delivery_workflow_sop.md](./docs/delivery_workflow_sop.md)
+
+除了上游原本的线性投递脚本外，本项目新增了一套面向工业级高可靠投递场景的 **Delivery Workflow 引擎**（位于 `scripts/delivery_workflow/`）。针对实际投递中常见的“DOM 弹窗遮挡导致文字卡在输入框”、“未发正文就盲传图片”、“会话重复点击”等历史教训，建立了具备**前置门禁、状态机双重强断言与异常快速熔断（Fail-Fast）**的标准化流水线：
+
+```mermaid
+flowchart LR
+    A[阶段0: 环境与就绪门禁] --> B[阶段1: 详情页沟通门禁]
+    B --> C[阶段2: 接管聊天窗口]
+    C --> D[阶段3: 强制浮层清障]
+    D --> E[阶段4: 招呼语双重硬断言]
+    E --> F[阶段5: 简历图片注入与断言]
+    F --> G[阶段6: 终局存证与记账]
+```
+
+#### 🌟 核心增强特性
+1. **多级门禁检测 (Gate Check)**：
+   - 自动检测浏览器/会话可用性；
+   - 自动识别岗位详情页“立即沟通”与“继续沟通”（若已沟通则自动跳过，不重复打扰）。
+2. **强制浮层清障 (Overlay Cleaner)**：
+   - 自动识别并移除 `.guide-download-app` 等阻碍点击的页面弹窗浮层，防止事件被拦截。
+3. **双重强断言校验 (Double Assertion)**：
+   - **文字断言**：发送后严格断言「输入框已清空」且「我方消息气泡数 +1」。若断言失败立即抛出异常并截图熔断，**绝不盲目进入图片上传**。
+   - **图片断言**：断言最新一条消息确实为图片类型，杜绝上传失败误报。
+4. **会话防重与成功记账 (Ledger & Audit)**：
+   - 自动识别会话历史中是否已发过图片；
+   - 投递成功后原子化写入 `assets/applied_history.json` 成功账本，并输出流水日志 `delivery_workflow.jsonl`。
+5. **完备测试套件**：
+   - 提供完整的自动化测试用例（覆盖门禁校验、招呼语失败熔断、上限拦截、账本写入等），确保逻辑稳定。
+
+#### 快速运行命令
+```bash
+# 1. 运行投递工作流（后台独立运行，支持候选列表驱动）
+python scripts/delivery_workflow/runner.py
+
+# 2. 运行自动化测试套件
+pytest tests/test_delivery_workflow.py -v
+```
+
+---
+
 ## 📁 运行数据在哪里
 
 Skill 目录一般在 `C:\Users\用户名\.claude\skills` 或当前项目的 `.claude\skills`。所有运行产物落在 Skill 目录下，**每次运行隔离在一个时间戳子目录** `assets/<timestamp>/`（例如 `assets/2026-08-14_16-05-21/`）。对你最有用的是 `deliver/#N-{公司}-{职位}/` 三件套：**定制简历图片 + 岗位信息+招呼语.md + 优化建议.md**。
@@ -213,6 +258,7 @@ Skill 目录一般在 `C:\Users\用户名\.claude\skills` 或当前项目的 `.c
 | 🖼️ **简历图片生成** | 自动生成不含个人信息简历图片 | 针对岗位定制优化 + 自动排版调整 |
 | 📊 **可视化报告** | HTML 交互报告 | 双主题、岗位卡片含匹配度/难度/成功概率 |
 | 🚀 **自动投递** | DrissionPage 浏览器自动化 | 个性化招呼语 + 简历图片上传 + 投递记录 + 回读校验 |
+| 🛡️ **健壮投递工作流** | Delivery Workflow 拓展引擎 | 状态机双重强断言（气泡+图片）、自动浮层清障、会话防重核对、终局成功记账、完整自动化测试 |
 | 🧩 **双运行路径** | Claude Code Skill ／ 纯命令行 | 同一套脚本、同一个模型接口；支持分阶段续跑、`--dry-run` 预演、投递独立闸门 |
 
 ---

@@ -237,7 +237,7 @@ def find_cities_by_name(city_data, names):
 # ==================== CSV / 去重 ====================
 
 def load_existing_links(file_path):
-    """加载已有CSV中的link到集合"""
+    """加载已有CSV中的link到集合，并合并历史已投递记录"""
     existing = set()
     if os.path.exists(file_path):
         try:
@@ -248,6 +248,12 @@ def load_existing_links(file_path):
                         existing.add(row['link'])
         except Exception as e:
             print(f"加载已有数据失败: {e}")
+    # 合并全局已投递历史，避免重复爬取已投递过的岗位
+    try:
+        from resume_matcher.history import get_applied_links
+        existing.update(get_applied_links())
+    except Exception:
+        pass
     return existing
 
 

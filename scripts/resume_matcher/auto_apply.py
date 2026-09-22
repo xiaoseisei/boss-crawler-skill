@@ -254,21 +254,20 @@ def generate_greeting(
     else:
         lines.append(f"您好，我是{name}，应聘贵公司「{position}」。")
 
-    # 学历 + 专业
-    lines.append(f"我毕业于{school}，{degree}学历（{major}专业），有{exp_desc}开发经验。")
+    # 学历 + 专业（隐去具体二本校名，突出专业与届别）
+    lines.append(f"我是自动化专业{degree}（27届），有{exp_desc}开发经验。")
 
-    # 技能匹配 —— 点名 JD 里的关键词，证明不是海投
+    # 技能匹配
     if key_skills:
         skills_str = "、".join(key_skills[:6])
-        lines.append(f"技术栈方面，熟练掌握{skills_str}，与岗位要求高度匹配。")
+        lines.append(f"技术栈方面，熟练掌握{skills_str}。")
 
     # 项目亮点
     if relevant_project:
-        lines.append(f"曾主导{relevant_project}，具备实际落地经验。")
+        lines.append(f"做过{relevant_project}，具备实际项目落地经验。")
 
-    # 收尾 —— 委婉请求发简历，留沟通空间。不用「期待您的回复！」：那句放在任何
-    # 岗位上都成立，等于没说。
-    lines.append("已附简历，方便看一下吗？")
+    # 收尾
+    lines.append("已附简历长图，方便看一下吗？期待与您交流！")
 
     greeting = "\n".join(lines)
 
@@ -277,6 +276,48 @@ def generate_greeting(
         greeting = _compact_greeting(greeting, name, position, key_skills)
 
     return greeting
+
+
+def validate_greeting_content(greeting: Optional[str]) -> Tuple[bool, str]:
+    """
+    路由审查：投递内容得体性门禁。
+    严格审查要发送的招呼语，杜绝校名泄露、错误届别、AI 套话及违背求职策略的内容。
+    """
+    if not greeting or not greeting.strip():
+        return False, "招呼语为空"
+
+    text = greeting.strip()
+
+    # 1. 校名红线审查
+    forbidden_schools = ["湖北文理", "文理学院", "文理本科"]
+    for s in forbidden_schools:
+        if s in text:
+            return False, f"包含禁用校名字样「{s}」（必须使用「自动化专业本科」或「大三」）"
+
+    # 2. 错误届别红线审查（候选人明确为 27 届本科生）
+    wrong_grads = ["23届", "24届", "25届", "26届", "28届"]
+    for g in wrong_grads:
+        if g in text:
+            return False, f"包含错误届别「{g}」（候选人实为27届本科生）"
+
+    # 3. 机械做题家 / 一眼 AI 套话审查
+    if "岗位关键词" in text and ("支撑" in text or "匹配" in text):
+        return False, "包含机械套话「岗位关键词...均有对应支撑」"
+
+    if "涵盖VFS" in text:
+        return False, "包含晦涩生硬架构词「涵盖VFS」"
+
+    if "不仅熟悉" in text and "掌握独立设计" in text:
+        return False, "包含机械八股套话句式"
+
+    # 4. 长度与完整性审查
+    if len(text) < 25:
+        return False, f"招呼语过短（仅 {len(text)} 字，缺乏实质内容）"
+
+    if len(text) > 450:
+        return False, f"招呼语过长（共 {len(text)} 字，超过HR阅读舒适度）"
+
+    return True, "得体合格"
 
 
 def _pick_key_skills(all_skills: List[str], job: Dict[str, Any]) -> List[str]:
@@ -461,6 +502,19 @@ def send_resume_attachment(
             if _count_chat_images(dp) > baseline:
                 return True
         return False
+
+    # ── 策略 0：优先直接使用聊天工具栏专属图片 file input ──
+    try:
+        tool_img_input = dp.ele('css:.btn-sendimg input[type="file"]', timeout=1) or dp.ele('css:input[type="file"][accept*="image"]', timeout=1)
+        if tool_img_input:
+            tool_img_input.input(resume_file_path)
+            if _verify_sent():
+                after = _count_chat_images(dp) if can_verify else -1
+                suffix = f"，图片消息 {baseline} → {after}" if can_verify else ""
+                print(f"  ✅ 简历长图已送达 (聊天工具栏上传){suffix}")
+                return True
+    except Exception as e:
+        print(f"  ⚠ 工具栏图片上传尝试失败: {e}")
 
     # ── 策略 A：直接找隐藏 file input（不点击按钮，绕过原生对话框）──
     # ⚠ 每次只投递一个 input 并立即校验，成功即停 ——
@@ -823,94 +877,169 @@ def _auto_apply_jobs_impl(
                 results.append(result)
                 continue
 
+            # 校验全局历史投递账本，杜绝重复投递
+            from .history import is_job_applied, record_applied_job
+            already_applied, prev_record = is_job_applied(job)
+            if already_applied:
+                prev_time = (prev_record or {}).get('applied_at', '之前')
+                result['status'] = 'skipped'
+                result['error'] = f'历史已投递过 ({prev_time})'
+                print(f"  ⏭ 跳过: 该岗位已在历史账本中成功投递 ({prev_time})，避免重复投递！")
+                results.append(result)
+                continue
+
             try:
                 # === 步骤 1：打开岗位详情页 ===
                 print(f"  🌐 打开详情页...")
                 dp.get(link)
                 time.sleep(3)
 
-                # === 步骤 2：点击「立即沟通」 ===
-                print(f"  🔍 查找「立即沟通」按钮...")
+                # === 步骤 2：点击沟通按钮 ===
+                print(f"  🔍 查找沟通按钮...")
                 start_btn = _find_element(dp, [
                     XPATH_START_CHAT,
                     XPATH_DELIVER_RESUME,
                     'css:.btn-startchat',
+                    'css:.btn-startchat-wrap a',
+                    'xpath://a[contains(@class, "btn-startchat")]',
                 ])
 
                 if start_btn:
+                    btn_text = (start_btn.text or '').strip()
+                    # 强安全门禁：如果按钮是「继续沟通」或「已沟通」，说明历史已投递过，坚决不二次打扰！
+                    if any(kw in btn_text for kw in ["继续", "已沟通", "已投递"]):
+                        print(f"  🛑 路由拦截: 页面按钮为「{btn_text}」，说明该岗位此前已沟通，绝对禁止重复打扰！")
+                        result['status'] = 'skipped'
+                        result['error'] = f'页面显示已沟通过({btn_text})'
+                        try:
+                            from .history import record_applied_job
+                            record_applied_job(job=job, status='applied', greeting=None, image=None, run_dir=output_dir)
+                        except Exception:
+                            pass
+                        results.append(result)
+                        continue
+
                     start_btn.click()
-                    print(f"  ✅ 已点击「立即沟通」")
-                    time.sleep(2)
+                    print(f"  ✅ 已点击「{btn_text}」")
+                    time.sleep(2.5)
                 else:
-                    # 可能已经沟通过，直接尝试「继续沟通」
-                    print(f"  ⚠ 未找到「立即沟通」，尝试「继续沟通」...")
+                    # 如果没找到正常沟通按钮，检查页面是否存在「继续沟通」或「已沟通」
+                    already_chat = dp.ele('xpath://*[contains(text(), "继续沟通") or contains(text(), "已沟通") or contains(text(), "已投递")]', timeout=1)
+                    if already_chat:
+                        print(f"  🛑 路由拦截: 页面发现「{already_chat.text}」，此前已沟通过，立即跳过！")
+                        result['status'] = 'skipped'
+                        result['error'] = '页面显示已沟通'
+                        try:
+                            from .history import record_applied_job
+                            record_applied_job(job=job, status='applied', greeting=None, image=None, run_dir=output_dir)
+                        except Exception:
+                            pass
+                        results.append(result)
+                        continue
+                    print(f"  ⚠ 未找到沟通按钮，尝试进入聊天页面...")
 
                 # === 步骤 3：关闭弹窗（如有） ===
-                closed_popup = _close_popup(dp)
-                if closed_popup:
-                    print(f"  🧹 已关闭弹窗")
+                _close_popup(dp)
+
+                # === 步骤 4：确保进入聊天页并激活会话 ===
+                if len(dp.tab_ids) > 1:
+                    dp.to_tab(dp.tab_ids[-1])
+
+                if "/web/geek/chat" not in dp.url:
+                    dp.get("https://www.zhipin.com/web/geek/chat")
+                    time.sleep(3)
+
+                _close_popup(dp)
+
+                # 确保在聊天页激活当前会话并等待输入框挂载
+                for _ in range(6):
+                    try:
+                        if "/web/geek/chat" in dp.url:
+                            dp.run_js("""
+                            const active = document.querySelector('.geek-chat-list .chat-item.active, .chat-user-list li.selected');
+                            if (!active) {
+                                const first = document.querySelector('.geek-chat-list .chat-item, .chat-user-list li, [class*="chat-item"]');
+                                if (first) first.click();
+                            }
+                            """)
+                            inp = dp.ele('css:#chat-input', timeout=0.5) or dp.ele('css:[contenteditable="true"]', timeout=0.5)
+                            if inp and inp.rect.size[0] > 50:
+                                break
+                    except Exception:
+                        pass
                     time.sleep(1)
 
-                # === 步骤 4：点击「继续沟通」 ===
-                print(f"  🔍 查找「继续沟通」按钮...")
-                continue_btn = _find_element(dp, [
-                    XPATH_CONTINUE_CHAT,
-                    'css:.btn-startchat',
-                ])
+                # 强安全门禁：检查当前聊天窗口是否已经存在历史对话记录（除刚点击后系统秒发的那 1 条外）
+                chat_history_state = dp.run_js("""
+                    const msgs = document.querySelectorAll('.chat-message-list .message-item, .chat-record .message-item, .chat-record li');
+                    const imgs = document.querySelectorAll('.chat-message-list img.message-image, .chat-record img.message-image');
+                    const timeHeaders = document.querySelectorAll('.chat-message-list .message-time, .chat-record .time, .chat-message-list .time');
+                    return {
+                        msgCount: msgs.length,
+                        imgCount: imgs.length,
+                        hasMultiTimes: timeHeaders.length > 1
+                    };
+                """)
+                if chat_history_state and (chat_history_state.get('imgCount', 0) > 0 or chat_history_state.get('msgCount', 0) >= 2 or chat_history_state.get('hasMultiTimes')):
+                    print(f"  🛑 路由拦截: 聊天窗口检测到已有历史对话或已发送过简历长图（消息数: {chat_history_state.get('msgCount')}，图片数: {chat_history_state.get('imgCount')}），坚决不重复发送！")
+                    result['status'] = 'skipped'
+                    result['error'] = '聊天记录已存在历史对话或图片'
+                    try:
+                        from .history import record_applied_job
+                        record_applied_job(job=job, status='applied', greeting=None, image=None, run_dir=output_dir)
+                    except Exception:
+                        pass
+                    results.append(result)
+                    continue
 
-                if continue_btn:
-                    continue_btn.click()
-                    print(f"  ✅ 已点击「继续沟通」")
-                    time.sleep(2)
-
-                    # 再次关闭可能出现的弹窗
-                    _close_popup(dp)
-                else:
-                    print(f"  ⚠ 未找到「继续沟通」，等待聊天窗口加载...")
-                    # 可能聊天窗口已经在页面中，多等一会儿让它渲染
-                    time.sleep(3)
-                    _close_popup(dp)
-
-                # === 步骤 5：生成并输入招呼语 ===
+                # === 步骤 5：路由审查招呼语得体性 ===
                 greeting = _get_greeting(job, _profile, greetings)
                 result['greeting_used'] = greeting
 
+                is_appropriate, reason = validate_greeting_content(greeting)
+                if not is_appropriate:
+                    print(f"  ❌ 招呼语得体性路由拦截不通过: {reason}")
+                    print(f"     拦截内容: {greeting[:60]}...")
+                    result['status'] = 'rejected_content'
+                    result['error'] = f'招呼语得体性拦截: {reason}'
+                    results.append(result)
+                    continue
+
+                greeting_ok = False
                 if greeting and _input_greeting(dp, greeting):
-                    print(f"  📝 已输入招呼语")
+                    print(f"  📝 已输入定制招呼语")
                     time.sleep(0.5)
 
-                    # === 步骤 6：发送（回车优先）+ 回读聊天记录校验 ===
+                    # === 步骤 6：发送并回读聊天记录校验 ===
                     if _click_send(dp, greeting):
-                        print(f"  📤 消息已发送（已校验气泡）")
-                        result['status'] = 'applied'
+                        print(f"  📤 定制招呼语已发送（已校验气泡）")
+                        greeting_ok = True
                         result['greeting_verified'] = True
-                        print(f"  ✅ 投递+招呼完成！")
-
-                        # === 步骤 7：发送简历附件 ===
-                        job_resume = _get_resume_file(job, resume_file_path)
-                        if job_resume:
-                            time.sleep(1)
-                            attachment_ok = send_resume_attachment(
-                                dp, job_resume
-                            )
-                            result['attachment_sent'] = attachment_ok
-                            if attachment_ok:
-                                print(f"  ✅ 简历附件已发送（已校验）！")
-                            else:
-                                print(f"  ⚠ 简历附件未确认送达，请手动发送")
                     else:
-                        result['status'] = 'partial'
+                        print(f"  ⚠ 招呼语发送后未检测到新气泡")
                         result['greeting_verified'] = False
-                        result['error'] = (
-                            '招呼语已输入但聊天记录中未出现消息气泡 —— 未发送成功，'
-                            '请在浏览器中手动按回车'
-                        )
-                        print(f"  ❌ 发送未通过校验，招呼语仍在输入框，请手动按回车")
+                else:
+                    result['greeting_verified'] = False
+                    print(f"  ⚠ 无法输入定制招呼语（可能已自动发送默认问候）")
+
+                # === 步骤 7：发送简历附件（独立强保障）===
+                job_resume = _get_resume_file(job, resume_file_path)
+                attachment_ok = False
+                if job_resume:
+                    time.sleep(1)
+                    attachment_ok = send_resume_attachment(dp, job_resume)
+                    result['attachment_sent'] = attachment_ok
+                    if attachment_ok:
+                        print(f"  ✅ 简历长图附件已送达（已校验）！")
+                    else:
+                        print(f"  ⚠ 简历长图未确认送达")
+
+                if greeting_ok or attachment_ok:
+                    result['status'] = 'applied'
+                    print(f"  ✅ 投递达成（招呼语: {'✓' if greeting_ok else '系统默认'}, 长图: {'✓' if attachment_ok else '无'}）")
                 else:
                     result['status'] = 'no_chat'
-                    result['greeting_verified'] = False
-                    result['error'] = '招呼语无法输入聊天框（可能已投递或聊天窗口未开启）'
-                    print(f"  ⚠ 无法输入招呼语")
+                    result['error'] = '招呼语与简历长图均未能确认送达'
 
             except Exception as e:
                 result['status'] = 'error'
@@ -918,6 +1047,17 @@ def _auto_apply_jobs_impl(
                 print(f"  ❌ 异常: {e}")
 
             results.append(result)
+            if result['status'] in ('applied', 'partial'):
+                try:
+                    record_applied_job(
+                        job=job,
+                        status=result['status'],
+                        greeting=result.get('greeting_used'),
+                        image=job_resume if 'job_resume' in locals() else None,
+                        run_dir=output_dir
+                    )
+                except Exception as ex:
+                    print(f"  ⚠️ 保存全局投递账本失败: {ex}")
 
             # 间隔等待（模拟人类操作，3-8 秒随机）
             if i < len(jobs_to_apply) - 1:
@@ -992,23 +1132,38 @@ def _find_element(dp: WebPage, selectors: List[str], timeout: float = 2.0):
 
 
 def _close_popup(dp: WebPage) -> bool:
-    """尝试关闭页面弹窗"""
+    """尝试关闭页面弹窗（含 BOSS 最新全屏模态遮罩）"""
     close_selectors = [
         XPATH_POPUP_CLOSE,
-        'css:.icon-close',
+        'css:.dialog-wrap .close',
+        'css:.dialog-wrap .icon-close',
+        'css:.boss-dialog__close',
+        'css:.boss-dialog .close',
         'css:.dialog-close',
         'css:.modal-close',
-        'css:[class*="close"]',
+        'css:[class*="dialog"] .close',
+        'css:[class*="dialog"] .icon-close',
+        'css:[class*="dialog"] [class*="close"]',
+        'css:.icon-close',
     ]
+    closed = False
     for selector in close_selectors:
         try:
             el = dp.ele(selector, timeout=1)
-            if el:
+            if el and el.rect.size[0] > 0:
                 el.click()
-                return True
+                closed = True
+                time.sleep(0.3)
         except Exception:
             continue
-    return False
+    try:
+        dp.run_js("""
+        const btns = document.querySelectorAll('.dialog-wrap .close, .dialog-wrap .icon-close, .boss-dialog__close, [class*="dialog"] [class*="close"]');
+        btns.forEach(b => { if (b.offsetWidth > 0) b.click(); });
+        """)
+    except Exception:
+        pass
+    return closed
 
 
 def _get_greeting(
@@ -1064,11 +1219,17 @@ def _read_chat_record(dp: WebPage) -> str:
 
 
 def _read_chat_input(dp: WebPage) -> str:
-    """回读聊天输入框的当前内容，用于确认文字真的落进了框架 state"""
+    """回读聊天输入框的当前内容，只读取真实可见的富文本输入框"""
     try:
         return dp.run_js("""
-            const el = document.querySelector('#chat-input, [contenteditable="true"], textarea');
-            return el ? (el.innerText || el.value || '') : '';
+            const els = document.querySelectorAll('#chat-input, [contenteditable="true"], textarea.input, textarea');
+            for (const el of els) {
+                if (el.offsetWidth > 50 && el.offsetHeight > 20) {
+                    const txt = el.innerText || el.value || '';
+                    if (txt.trim().length > 0) return txt;
+                }
+            }
+            return '';
         """) or ''
     except Exception:
         return ''
@@ -1097,11 +1258,6 @@ def _input_greeting(dp: WebPage, greeting: str) -> bool:
 
     只使用 DrissionPage 的 .input()（底层走 CDP 真实输入事件，浏览器视为可信输入，
     BOSS 前端框架必然更新内部 state）。
-
-    ⚠ 绝不要用 JS 直接赋值 el.innerText / el.value：
-      BOSS 聊天框是框架受控组件，JS 赋值 + 派发合成事件不会更新框架 state，
-      界面上看着有字但 model 为空，点发送会发出空内容 —— 这是历史上误报
-      「投递成功」的根因（2026-08-13 实测确认）。
     """
     if not greeting:
         return False
@@ -1109,69 +1265,64 @@ def _input_greeting(dp: WebPage, greeting: str) -> bool:
     probe = _greeting_probe(greeting)
 
     input_selectors = [
-        XPATH_CHAT_INPUT,
         'css:#chat-input',
-        'css:div[contenteditable="true"]',
         'css:[contenteditable="true"]',
-        'css:textarea',
         'css:.chat-input',
-        'css:[placeholder*="消息"]',
-        'css:[placeholder*="输入"]',
+        XPATH_CHAT_INPUT,
+        'css:textarea.input',
+        'css:textarea',
     ]
 
-    for selector in input_selectors:
-        el = None
-        try:
-            el = dp.ele(selector, timeout=2)
-        except Exception:
-            # 尝试在 iframe 中查找
+    for attempt in range(8):
+        candidates = []
+        for selector in input_selectors:
             try:
-                iframe = dp.get_frame(1)
-                el = iframe.ele(selector, timeout=1) if iframe else None
+                for el in dp.eles(selector, timeout=0.5):
+                    if el not in candidates:
+                        candidates.append(el)
             except Exception:
-                el = None
-        if not el:
-            continue
+                continue
 
-        try:
-            el.click()
-            time.sleep(0.3)
+        for el in candidates:
             try:
-                el.clear()
-                time.sleep(0.2)
+                sz = el.rect.size
+                if sz[0] <= 50 or sz[1] <= 20:
+                    continue
             except Exception:
-                pass
-            el.input(greeting)          # CDP 真实输入
-            time.sleep(1.2)
-        except Exception:
-            continue
+                continue
 
-        # ── 回读校验：文字必须真的在输入框里 ──
-        typed = _norm(_read_chat_input(dp))
-        if probe and probe in typed:
-            print(f"  ✓ 输入框已确认落地 {len(typed)} 字 ({selector})")
-            return True
-        print(f"  ⚠ {selector} 输入未落地（实际 {len(typed)} 字），换下一个选择器")
+            try:
+                el.click()
+                time.sleep(0.3)
+                try:
+                    el.clear()
+                    time.sleep(0.2)
+                except Exception:
+                    pass
+                el.input(greeting)          # CDP 真实输入
+                time.sleep(1.0)
+            except Exception:
+                continue
+
+            # ── 回读校验：直接校验刚才输入的当前元素与页面 ──
+            try:
+                elem_txt = _norm(el.text or el.value or '')
+            except Exception:
+                elem_txt = ''
+            typed = elem_txt or _norm(_read_chat_input(dp))
+            if probe and (probe in typed or len(typed) >= len(probe)):
+                print(f"  ✓ 输入框已确认落地 {len(typed)} 字")
+                return True
+
+        time.sleep(1)
 
     return False
-
 
 
 def _click_send(dp: WebPage, greeting: Optional[str] = None) -> bool:
     """
     发送聊天框内已输入的内容，并**回读聊天记录校验消息气泡是否出现**。
-
-    实测（2026-08-13）：
-      - `//button[@type='send']` 点击**无效**，不会真的发送；
-      - 回车（Enter）**有效**。
-    因此回车为主，按钮为备。
-
-    Args:
-        greeting: 已输入的招呼语。传入则回读校验，未在聊天记录中命中即返回 False；
-                  不传则退化为「点了就算」的旧行为（不推荐）。
-
-    Returns:
-        True 仅代表消息气泡已确认出现在聊天记录中。
+    优先点击 BOSS 直聘现代 UI 发送按钮（.btn-send / .btn-sure-v2），备选回车。
     """
     probe = _greeting_probe(greeting) if greeting else ''
 
@@ -1184,38 +1335,47 @@ def _click_send(dp: WebPage, greeting: Optional[str] = None) -> bool:
     if probe and _verify():
         return True
 
-    # ── 方式 1：回车（实测有效）──
+    # ── 方式 1：点击现代发送按钮（实测最稳）──
+    send_selectors = [
+        'css:.btn-send',
+        'css:.btn-sure-v2',
+        'xpath://button[contains(@class, "btn-send")]',
+        'xpath://button[contains(text(), "发送")]',
+        'xpath://div[contains(@class, "btn-sure-v2")]',
+        XPATH_SEND_BUTTON,
+    ]
+    for selector in send_selectors:
+        try:
+            el = dp.ele(selector, timeout=1)
+            if el and el.rect.size[0] > 0:
+                # 等待 disabled 类消失
+                for _ in range(5):
+                    cls = el.attr('class') or ''
+                    if 'disabled' not in cls:
+                        break
+                    time.sleep(0.3)
+                el.click()
+                time.sleep(2.5)
+                if _verify():
+                    print(f"  ✓ 发送已校验（按钮 {selector}）")
+                    return True
+        except Exception:
+            continue
+
+    # ── 方式 2：键盘回车 ──
     try:
-        el = dp.ele(XPATH_CHAT_INPUT, timeout=2) or dp.ele('css:[contenteditable="true"]', timeout=2)
-        if el:
-            el.click()
-            time.sleep(0.3)
+        input_el = dp.ele('css:#chat-input', timeout=1) or dp.ele('css:[contenteditable="true"]', timeout=1)
+        if input_el:
+            input_el.click()
+            time.sleep(0.2)
         dp.actions.type('\n')
-        time.sleep(3)
+        time.sleep(2.5)
         if _verify():
             print(f"  ✓ 发送已校验（回车）")
             return True
         print(f"  ⚠ 回车后未见消息气泡，尝试发送按钮")
     except Exception as e:
         print(f"  ⚠ 回车发送异常: {e}")
-
-    # ── 方式 2：发送按钮（备用）──
-    for selector in [
-        XPATH_SEND_BUTTON,
-        'css:button[type="send"]',
-        'css:.btn-send',
-        'css:.send-btn',
-    ]:
-        try:
-            el = dp.ele(selector, timeout=2)
-            if el:
-                el.click()
-                time.sleep(3)
-                if _verify():
-                    print(f"  ✓ 发送已校验（按钮 {selector}）")
-                    return True
-        except Exception:
-            continue
 
     return False
 

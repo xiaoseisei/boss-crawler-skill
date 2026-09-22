@@ -124,6 +124,10 @@ def build_filter_query_string(filter_dict):
     for key in ['jobType', 'salary', 'experience', 'degree', 'scale']:
         values = filter_dict.get(key, [])
         if values:
+            if key == 'jobType' and len(values) > 1:
+                # BOSS 直聘 API 不支持多个 jobType 逗号拼接（会报 code 19 参数值错误）；
+                # 当同时选中多个（如实习+全职）时，省略该参数即自然覆盖全部工作类型。
+                continue
             parts.append(f'{key}={",".join(values)}')
     if parts:
         return '&' + '&'.join(parts)

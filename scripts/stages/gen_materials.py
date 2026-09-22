@@ -540,6 +540,30 @@ def existing_artifact(gen_dir, kind, index):
     return None
 
 
+def _ensure_resume_header(data, job, profile):
+    """确保优化后的简历正文顶部包含候选人的姓名、联系方式与教育背景抬头。"""
+    if not isinstance(data, dict) or 'optimized_resume' not in data:
+        return
+    text = data.get('optimized_resume') or ''
+    b = profile.get('basic_info', {})
+    e = profile.get('education', {})
+    av = b.get('availability', {})
+    name = b.get('name', '夏子聪')
+    phone = b.get('phone', '18971817011')
+    email = b.get('email', '2646428831@qq.com')
+    school = e.get('school', '湖北文理学院')
+    major = e.get('major', '自动化')
+    degree = e.get('degree', '本科')
+    grad = e.get('graduation_year', '2027')
+    can_start = av.get('can_start', '随时到岗')
+    duration = av.get('duration', '可实习6个月以上')
+    days = av.get('days_per_week', '每周5天')
+    pos_title = job.get('职位') or job.get('position') or '大模型应用开发'
+    header = f"# {name}\n\n求职意向：{pos_title} | 到岗时间：{can_start}（{duration}，{days}）\n电话：{phone}（微信同号） | 邮箱：{email} | {school} · {major} · {degree}（{grad}届）\n\n"
+    if not text.startswith(f"# {name}"):
+        data['optimized_resume'] = header + text
+
+
 def _write_atomic(path, text):
     """先写 .part 再改名。
 
@@ -808,11 +832,13 @@ def main():
             data = apply_from_decision(job, resume_text, cfg_resume, run_dir, index, company)
             if data is None:
                 return None
+            _ensure_resume_header(data, job, profile)
             path = os.path.join(gen_dir, 'resume_%d_%s.json' % (index, company))
             _write_atomic(path, json.dumps(data, ensure_ascii=False, indent=2))
             rewritten = False
         else:  # 'resume'：ai 合并两阶段（默认/无闸门）
             data = gen_resume(job, resume_text, match, cfg_resume, run_dir)
+            _ensure_resume_header(data, job, profile)
             path = os.path.join(gen_dir, 'resume_%d_%s.json' % (index, company))
             _write_atomic(path, json.dumps(data, ensure_ascii=False, indent=2))
             rewritten = False

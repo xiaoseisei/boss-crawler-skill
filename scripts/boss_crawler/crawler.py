@@ -122,9 +122,7 @@ def _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen=N
     Returns:
         (total_processed, total_written, total_skipped, total_run_dups)
     """
-    dp.get(url)
     dp.listen.start('zpgeek/search/joblist.json')
-    time_stats.end_request(True, url)
 
     total_written = 0
     total_skipped = 0
@@ -140,6 +138,12 @@ def _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen=N
                 print(f"\n已达到数量限制 {count_limit} 条")
                 break
 
+            current_url = url if page_num == 1 else f"{url}&page={page_num}"
+            if page_num > 1:
+                time_stats.start_request('page', current_url)
+            dp.get(current_url)
+            time_stats.end_request(True, current_url)
+
             print(f"\n[第{page_num}页] 爬取中...")
 
             try:
@@ -152,7 +156,7 @@ def _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen=N
                 continue
 
             time_stats.start_request('api', 'zpgeek/search/joblist.json')
-            r = dp.listen.wait(timeout=3)
+            r = dp.listen.wait(timeout=5)
             status = check_page_status(dp, r)
 
             if status == 'need_login':
@@ -176,7 +180,9 @@ def _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen=N
             consecutive_no_data = 0
 
             try:
-                job_list = r.response.body.get('zpData', {}).get('jobList', [])
+                zp_data = r.response.body.get('zpData', {})
+                job_list = zp_data.get('jobList', [])
+                has_more = zp_data.get('hasMore', True)
                 if job_filter is not None:
                     job_list = [j for j in job_list if job_filter(j)]
                 written, skipped, run_dups = process_job_list(
@@ -188,6 +194,22 @@ def _crawl_paginated(dp, url, file_path, count_limit, existing_links, run_seen=N
 
                 time_stats.end_request(True, f"获取{len(job_list)}条,写入{written}条")
                 print(f"[第{page_num}页] 获取到 {len(job_list)} 条数据，已写入 {written} 条（跳过 {skipped} 条重复）")
+
+                if not has_more or len(job_list) == 0:
+                    print(f"[第{page_num}页] 接口返回无更多数据 (hasMore=False)，结束本轮分页")
+                    break
+
+                if written == 0:
+                    consecutive_zero_written = locals().get('consecutive_zero_written', 0) + 1
+                    if consecutive_zero_written >= 3 and len(job_list) < 10:
+                        print(f"[第{page_num}页] 连续多次无新岗位且为推荐流，结束本轮分页")
+                        break
+                else:
+                    consecutive_zero_written = 0
+
+                if page_num >= 30:
+                    print(f"[第{page_num}页] 已达最大分页保护上限 (30页)，结束本轮分页")
+                    break
 
                 if should_skip_remaining_pages(len(job_list), run_dups):
                     pct = round(run_dups / len(job_list) * 100)

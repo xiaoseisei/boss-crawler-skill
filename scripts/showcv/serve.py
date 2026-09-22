@@ -33,14 +33,25 @@ RESERVED_PORTS = {3070, 3080}
 for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(encoding='utf-8')
 
-# 本机 Python 的 mimetypes 认不出这几个，不注册会退成 application/octet-stream
+# 本机 Python 的 mimetypes 在 Windows 上常把 .js 识别为 text/plain，导致 Chrome 拒绝加载 ES module
+mimetypes.add_type('text/javascript', '.js')
+mimetypes.add_type('text/javascript', '.mjs')
 mimetypes.add_type('font/woff2', '.woff2')
 mimetypes.add_type('font/ttf', '.ttf')
 mimetypes.add_type('font/otf', '.otf')
 
 
+
 class SpaHandler(SimpleHTTPRequestHandler):
     """不存在且不带扩展名的路径一律回 index.html。"""
+
+    extensions_map = SimpleHTTPRequestHandler.extensions_map.copy()
+    extensions_map['.js'] = 'text/javascript'
+    extensions_map['.mjs'] = 'text/javascript'
+    extensions_map['.css'] = 'text/css'
+    extensions_map['.woff2'] = 'font/woff2'
+    extensions_map['.ttf'] = 'font/ttf'
+    extensions_map['.otf'] = 'font/otf'
 
     def translate_path(self, path: str) -> str:
         local = super().translate_path(path)
@@ -51,6 +62,10 @@ class SpaHandler(SimpleHTTPRequestHandler):
         if Path(local).suffix:
             return local
         return str(Path(self.directory) / 'index.html')
+
+    def end_headers(self):
+        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+        super().end_headers()
 
     def log_message(self, *args) -> None:
         # 一次页面加载有几十个请求（含 14MB 字体），打日志会把后台任务输出刷爆

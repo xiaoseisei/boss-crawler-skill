@@ -405,6 +405,53 @@ def distribute(items, pngs):
     return missing
 
 
+def inject_avatar_if_present(url, items, browser_path=None, headless=False):
+    avatar_path = os.path.join(_SKILL_ROOT, 'assets', 'avatar.jpg')
+    if not os.path.exists(avatar_path):
+        return
+    import base64
+    from PIL import Image
+    try:
+        im = Image.open(avatar_path)
+        w, h = im.size
+        with open(avatar_path, 'rb') as f:
+            b64 = base64.b64encode(f.read()).decode('ascii')
+        avatar_cfg = {
+            'src': 'data:image/jpeg;base64,' + b64,
+            'visible': True,
+            'size': 85,
+            'naturalWidth': w,
+            'naturalHeight': h,
+            'borderRadius': 8
+        }
+    except Exception as e:
+        print('  ⚠ 无法加载头像图片: %s' % e)
+        return
+
+    sys.path.insert(0, _SHOWCV_DIR)
+    try:
+        from _browser import connect, open_app
+        from storage import KEY
+        browser = connect(browser_path, headless)
+        tab = open_app(browser, url)
+        raw = tab.local_storage(KEY)
+        if raw:
+            data = json.loads(raw)
+            resumes = data.get('state', {}).get('resumes', [])
+            staged_names = {item['staged_name'] for item in items}
+            updated = 0
+            for r in resumes:
+                if r.get('name') in staged_names:
+                    r.setdefault('settings', {})['avatar'] = avatar_cfg
+                    updated += 1
+            if updated:
+                tab.set.local_storage(KEY, json.dumps(data, ensure_ascii=False))
+                tab.refresh()
+                print('  ✅ 已为 %d 份简历注入头像照片' % updated)
+    except Exception as e:
+        print('  ⚠ 注入头像失败: %s' % e)
+
+
 # ==================== 主流程 ====================
 
 def main():
@@ -570,8 +617,10 @@ def main():
                     print('\n❌ 导入时撞上同名简历（ShowCV 存成了 (2)/(3) 另一份）。')
                     print('   这是渲染会导出旧图的必现条件，已中止导出。')
                     print('   清理 origin 上的同名临时件后重跑 render：')
-                    print('     python scripts/showcv/delete_resumes.py --url %s --all --dry-run' % url)
                     raise _StepFailed('import')
+
+                # ── 4.5 头像注入 ──
+                inject_avatar_if_present(url, items, args.browser, args.headless)
 
                 # ── 5. 导出 ──
                 ok, _ = run_step('export_images', export_cmd, args.timeout)

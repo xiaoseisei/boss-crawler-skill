@@ -230,6 +230,10 @@ def resolve(stage: Optional[str] = None, config_path: Optional[str] = None,
     # ── 第 3 层：环境变量 ──
     for key, names in _ENV_ALIASES.items():
         for name in names:
+            if kwargs.get('protocol') == 'openai' and name.startswith('ANTHROPIC_'):
+                continue
+            if kwargs.get('protocol') == 'anthropic' and name.startswith('OPENAI_'):
+                continue
             raw = env.get(name)
             if raw is None or str(raw).strip() == '':
                 continue

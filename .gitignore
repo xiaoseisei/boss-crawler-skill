@@ -21,3 +21,8 @@ showcv-resume.json
 .python-version
 pyproject.toml
 uv.lock
+
+# 临时与测试缓存文件
+.tmp/
+.pytest_cache/
+*.log
